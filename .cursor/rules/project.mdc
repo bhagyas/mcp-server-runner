@@ -3,6 +3,8 @@ description:
 globs: 
 alwaysApply: false
 ---
+This is built with Tauri.
+
 I want to build an app that runs in the background of macOS.
 It should have a mac menu bar item to show that its running.
 
