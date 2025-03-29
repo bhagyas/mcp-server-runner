@@ -9,3 +9,6 @@ I want to build an app that runs in the background of macOS.
 It should have a mac menu bar item to show that its running.
 
 The application lets you add commands such as 'npx @agentdeskai/browser-tools-server@latest' that run a particular server.
+
+- Always add the crates if required or missing.
+- It is built with tauri, so Typescript and Rust.
