@@ -1,10 +1,12 @@
 export interface MCPServerConfig {
   command: string;
   args: string[];
+  env?: Record<string, string>;
+  port?: number;
 }
 
 export interface Config {
-  mcp_servers: Record<string, MCPServerConfig>;
+  mcpServers: Record<string, MCPServerConfig>;
 }
 
 export interface MCPCommand {
@@ -12,11 +14,15 @@ export interface MCPCommand {
   name: string;
   command: string;
   args: string[];
+  env?: Record<string, string>;
+  port?: number;
   isRunning: boolean;
 }
 
-export type AddMCPCommand = {
+export interface AddMCPCommand {
   name: string;
   command: string;
   args: string[];
-}; 
+  env?: Record<string, string>;
+  port?: number;
+} 

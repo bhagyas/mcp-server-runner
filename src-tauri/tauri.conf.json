@@ -1,25 +1,28 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "mcp-runner",
+  "productName": "MCP Server Runner",
   "version": "0.1.0",
-  "identifier": "com.xinterium.mcp-runner",
+  "identifier": "com.xinterium.mcp-server-runner",
   "build": {
-    "beforeDevCommand": "bun run dev",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run build",
     "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
-        "title": "mcp-runner",
+        "fullscreen": false,
+        "resizable": true,
+        "title": "MCP Server Runner",
         "width": 800,
         "height": 600
       }
     ],
     "security": {
       "csp": null
-    }
+    },
+    "withGlobalTauri": true
   },
   "bundle": {
     "active": true,
@@ -31,5 +34,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    }
   }
 }

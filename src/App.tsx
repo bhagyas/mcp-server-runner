@@ -9,7 +9,6 @@ import "./App.css";
 interface CommandInfo {
   id: string;
   is_running: boolean;
-  port: number | null;
   has_error: boolean;
 }
 
@@ -65,11 +64,13 @@ function App() {
     try {
       setError(null);
       const config = await invoke<Config>("load_config", { configPath: null });
-      setCommands(Object.entries(config.mcp_servers).map(([id, server]) => ({
+      setCommands(Object.entries(config.mcpServers).map(([id, server]) => ({
         id,
         name: id,
         command: server.command,
         args: server.args,
+        env: server.env,
+        port: server.port,
         isRunning: false,
       })));
     } catch (err) {
@@ -84,6 +85,8 @@ function App() {
         name: newCommand.name,
         command: newCommand.command,
         args: newCommand.args,
+        env: newCommand.env || {},
+        port: newCommand.port,
       });
       
       await loadConfig();
@@ -153,6 +156,8 @@ function App() {
         name: command.name,
         command: command.command,
         args: command.args,
+        env: command.env || {},
+        port: command.port,
       });
       
       await loadConfig();
@@ -165,17 +170,24 @@ function App() {
   const handleSaveConfig = async (config: Config) => {
     try {
       setError(null);
+      // Ensure config has the correct structure
+      const configToSave = {
+        mcpServers: config.mcpServers || {}
+      };
+      
       // Save the new configuration
-      await invoke<void>("save_config", { config });
+      await invoke<void>("save_config", { config: configToSave });
       
       // Update the commands list with the new configuration
       const runningStates = new Map(commands.map(cmd => [cmd.id, cmd.isRunning]));
       
-      const newCommands = Object.entries(config.mcp_servers).map(([id, server]) => ({
+      const newCommands = Object.entries(config.mcpServers || {}).map(([id, server]) => ({
         id,
         name: id,
         command: server.command,
         args: server.args,
+        env: server.env,
+        port: server.port,
         isRunning: runningStates.get(id) || false,
       }));
       
@@ -189,7 +201,7 @@ function App() {
 
   return (
     <main className="container">
-      <h1>MCP Runner</h1>
+      <h1>MCP Server Runner</h1>
       <AddMCPCommandForm 
         onAdd={handleAddCommand} 
         editCommand={editingCommand}
@@ -253,9 +265,7 @@ function App() {
             <div className="command-info">
               {cmd.isRunning && (
                 <span className="port-info">
-                  {commandInfo[cmd.id]?.port 
-                    ? `Running on port: ${commandInfo[cmd.id].port}`
-                    : 'Detecting port...'}
+                  {cmd.port && `Port: ${cmd.port}`}
                 </span>
               )}
             </div>
