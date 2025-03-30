@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from '@tauri-apps/api/core';
+import { confirm } from '@tauri-apps/plugin-dialog';
 import type { MCPCommand, AddMCPCommand, Config, MCPServerConfig } from "./types/mcp";
 import { AddMCPCommand as AddMCPCommandForm } from "./components/AddMCPCommand";
 import { Terminal } from "./components/Terminal";
@@ -212,19 +213,35 @@ function App() {
   };
 
   const handleRemoveCommand = async (idToRemove: string) => {
-    console.log("Removing command:", idToRemove);
+    console.log("Attempting to remove command:", idToRemove);
+    // Ensure it's not running (already checked by button disable, but good practice)
     if (commandInfo[idToRemove]?.is_running) {
       setError("Cannot remove a running server.");
       return;
     }
+
+    // --- Confirmation Dialog --- 
+    const userConfirmed = await confirm(
+      `Are you sure you want to remove the server "${idToRemove}"? This action cannot be undone.`, 
+      { title: 'Remove Server?', okLabel: 'Confirm', cancelLabel: 'Cancel' }
+    );
+
+    if (!userConfirmed) {
+      console.log("User cancelled server removal.");
+      setOpenMenuId(null);
+      return;
+    }
+    // --- End Confirmation --- 
+
+    console.log("User confirmed removal for command:", idToRemove);
     try {
       setError(null);
       await invoke<Config>("remove_server", { name: idToRemove });
-      await loadConfig();
+      await loadConfig(); // Reload config to reflect removal
       if (selectedCommand === idToRemove) {
-        setSelectedCommand(null);
+        setSelectedCommand(null); // Close terminal if it was open for this command
       }
-      setOpenMenuId(null);
+      setOpenMenuId(null); // Ensure menu is closed after action
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error("Remove command failed:", errorMsg);
