@@ -1,11 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from '@tauri-apps/api/core';
 import type { MCPCommand, AddMCPCommand, Config, MCPServerConfig } from "./types/mcp";
 import { AddMCPCommand as AddMCPCommandForm } from "./components/AddMCPCommand";
 import { Terminal } from "./components/Terminal";
-import { ConfigEditor } from "./components/ConfigEditor";
+import { ConfigEditor, ConfigEditorRef } from "./components/ConfigEditor";
 import { Settings } from "./components/Settings";
-import { VscServer, VscSettingsGear, VscAdd, VscJson, VscTerminal, VscTrash, VscEdit, VscDebugStart, VscDebugStop } from "react-icons/vsc";
+import { VscServer, VscSettingsGear, VscAdd, VscJson, VscTerminal, VscTrash, VscEdit, VscDebugStart, VscDebugStop, VscSave } from "react-icons/vsc";
 import "./App.css";
 
 interface CommandInfo {
@@ -25,6 +25,7 @@ function App() {
   const [editingCommand, setEditingCommand] = useState<MCPCommand | null>(null);
   const [isAddCommandFormOpen, setIsAddCommandFormOpen] = useState(false);
   const [activeView, setActiveView] = useState<ActiveView>('servers');
+  const configEditorRef = useRef<ConfigEditorRef>(null);
 
   useEffect(() => {
     loadConfig();
@@ -170,9 +171,11 @@ function App() {
       const isCurrentlyRunning = currentBackendInfo ? currentBackendInfo.is_running : cmd.isRunning;
       
       let backendResponseInfo: CommandInfo;
+      let wasStartAttempt = false; // Flag to know if we tried to start
 
       if (!isCurrentlyRunning) {
         console.log(`Attempting to start command ${cmdId}`);
+        wasStartAttempt = true;
         backendResponseInfo = await invoke<CommandInfo>("start_command", { id: cmdId });
         console.log(`Start command ${cmdId} backend response:`, backendResponseInfo);
       } else {
@@ -190,13 +193,17 @@ function App() {
           c.id === cmdId ? { ...c, isRunning: backendResponseInfo.is_running } : c
       ));
 
+      // --- Auto-open terminal on successful start ---
+      if (wasStartAttempt && backendResponseInfo.is_running) {
+        console.log(`Command ${cmdId} started successfully, opening terminal.`);
+        setSelectedCommand(cmdId);
+      }
+      // --- End auto-open --- 
+
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error(`Toggle command ${cmdId} failed:`, errorMsg);
       setError(errorMsg);
-      // Optionally: attempt to re-sync UI state with backend if an error occurred
-      // This might involve calling get_command_info here, but can get complex.
-      // For now, just show the error.
     }
   };
 
@@ -222,11 +229,12 @@ function App() {
   };
 
   const handleSaveConfig = async (config: Config) => {
-    console.log("Saving config manually...");
+    console.log("Saving config via onSave prop...");
     try {
       setError(null);
       await invoke<void>("save_config", { config });
       await loadConfig();
+      console.log("Config saved successfully via onSave prop.");
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error("Save config failed:", errorMsg);
@@ -250,6 +258,27 @@ function App() {
   const handleFormClose = () => {
     setIsAddCommandFormOpen(false);
     setEditingCommand(null);
+  };
+
+  // Determine header content based on active view
+  let headerTitle = "Servers";
+  let headerSubtitle = "Manage and monitor your MCP servers";
+  if (activeView === 'config') {
+    headerTitle = "Configuration";
+    headerSubtitle = "Edit the raw mcp-config.json file";
+  } else if (activeView === 'settings') {
+    headerTitle = "Settings";
+    headerSubtitle = "Configure application settings";
+  }
+
+  const triggerConfigSave = async () => {
+    if (configEditorRef.current) {
+      try {
+        await configEditorRef.current.save();
+      } catch (error) {
+        console.error("Save triggered from App failed.");
+      }
+    }
   };
 
   return (
@@ -282,148 +311,170 @@ function App() {
       </aside>
 
       <main className="main-content">
-        {activeView === 'servers' ? (
-          <>
-            <div className="header">
-              <div>
-                <h1>MCP Server Runner</h1>
-                <p className="subtitle">Manage and monitor your MCP servers</p>
-              </div>
-              <div className="header-actions">
-                <button className="primary-button" onClick={() => setIsAddCommandFormOpen(true)}>
-                  <VscAdd className="button-icon" />
-                  Add Server
-                </button>
-              </div>
-            </div>
+        {/* --- Shared Header --- */}
+        <div className="header">
+          <div>
+            <h1>{headerTitle}</h1>
+            <p className="subtitle">{headerSubtitle}</p>
+          </div>
+          <div className="header-actions">
+            {activeView === 'servers' && (
+               <button className="primary-button" onClick={() => setIsAddCommandFormOpen(true)}>
+                 <VscAdd className="button-icon" />
+                 Add Server
+               </button>
+             )}
+             {activeView === 'config' && (
+               <button className="primary-button" onClick={triggerConfigSave}>
+                 <VscSave className="button-icon" />
+                 Save Config
+               </button>
+             )}
+          </div>
+        </div>
 
-            <div className="stats-container">
-              <div className="stat-item">
-                <h3>Total Servers</h3>
-                <div className="stat-value">{commands.length}</div>
-              </div>
-              <div className="stat-item">
-                <h3>Running Servers</h3>
-                <div className="stat-value">
-                  {commands.filter(cmd => cmd.isRunning).length}
+        {/* --- Error Display --- */}
+        {error && (
+          <div className="error-message">
+            Error: {error}
+          </div>
+        )}
+
+        {/* --- View Specific Content --- */}
+        <div className="view-content">
+          {activeView === 'servers' && (
+            <>
+              {/* Stats container specific to Servers view */}
+              <div className="stats-container">
+                <div className="stat-item">
+                  <h3>Total Servers</h3>
+                  <div className="stat-value">{commands.length}</div>
+                </div>
+                <div className="stat-item">
+                  <h3>Running Servers</h3>
+                  {/* Use commandInfo length for running count for better accuracy */}
+                  <div className="stat-value">
+                     {Object.values(commandInfo).filter(info => info.is_running).length}
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {error && (
-              <div className="error-message">
-                Error: {error}
-              </div>
-            )}
-            
-            <div className="commands-list">
-              {commands.map((cmd) => {
-                 const currentInfo = commandInfo[cmd.id] || { is_running: false, has_error: false };
-                 const isRunning = currentInfo.is_running;
-                 const hasError = currentInfo.has_error;
-                 const isDisabled = isRunning;
-                 
-                 return (
-                  <div key={cmd.id} className={`command-item ${hasError && !isRunning ? 'error-state' : ''}`}>
-                    <div className="command-header">
-                      <div className="command-name">
-                        <span className={`status-indicator ${isRunning ? 'running' : ''} ${hasError ? 'error' : ''}`} />
-                        {cmd.name}
+              {/* Command list specific to Servers view */}
+              <div className="commands-list">
+                {commands.map((cmd) => {
+                  const currentInfo = commandInfo[cmd.id] || { is_running: false, has_error: false };
+                  const isRunning = currentInfo.is_running;
+                  const hasError = currentInfo.has_error;
+                  const isDisabled = isRunning;
+                  
+                  return (
+                    <div key={cmd.id} className={`command-item ${hasError && !isRunning ? 'error-state' : ''}`}>
+                      <div className="command-header">
+                        <div className="command-name">
+                          <span className={`status-indicator ${isRunning ? 'running' : ''} ${hasError ? 'error' : ''}`} />
+                          {cmd.name}
+                        </div>
+                        <div className="menu-container">
+                          <button 
+                            className="menu-button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setOpenMenuId(openMenuId === cmd.id ? null : cmd.id);
+                            }}
+                            disabled={isRunning}
+                          >
+                            <div className="menu-dots">⋮</div>
+                          </button>
+                          {openMenuId === cmd.id && (
+                            <div className="dropdown-menu">
+                              <button 
+                                onClick={() => {
+                                  setEditingCommand(cmd);
+                                  setIsAddCommandFormOpen(true);
+                                  setOpenMenuId(null);
+                                }}
+                                disabled={isDisabled}
+                              >
+                                <VscEdit className="menu-icon" />
+                                Edit
+                              </button>
+                              <button 
+                                className="delete"
+                                onClick={() => handleRemoveCommand(cmd.id)}
+                                disabled={isDisabled}
+                              >
+                                <VscTrash className="menu-icon" />
+                                Remove
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                      <div className="menu-container">
-                        <button 
-                          className="menu-button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setOpenMenuId(openMenuId === cmd.id ? null : cmd.id);
-                          }}
-                          disabled={isRunning}
-                        >
-                          <div className="menu-dots">⋮</div>
-                        </button>
-                        {openMenuId === cmd.id && (
-                          <div className="dropdown-menu">
-                            <button 
-                              onClick={() => {
-                                setEditingCommand(cmd);
-                                setIsAddCommandFormOpen(true);
-                                setOpenMenuId(null);
-                              }}
-                              disabled={isDisabled}
-                            >
-                              <VscEdit className="menu-icon" />
-                              Edit
-                            </button>
-                            <button 
-                              className="delete"
-                              onClick={() => handleRemoveCommand(cmd.id)}
-                              disabled={isDisabled}
-                            >
-                              <VscTrash className="menu-icon" />
-                              Remove
-                            </button>
+                      <div className="command-info">
+                        <div className="info-row">
+                          <span className="info-label">Command</span>
+                          <span className="info-value">{cmd.command} {cmd.args.join(' ')}</span>
+                        </div>
+                        {cmd.port && (
+                          <div className="info-row">
+                            <span className="info-label">Port</span>
+                            <span className="info-value">{cmd.port}</span>
+                          </div>
+                        )}
+                        {Object.entries(cmd.env || {}).length > 0 && (
+                          <div className="info-row">
+                            <span className="info-label">Environment</span>
+                            <div className="info-value">
+                              {Object.entries(cmd.env || {}).map(([key, value], i) => (
+                                <div key={key}>
+                                  {key}={value}
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         )}
                       </div>
-                    </div>
-                    <div className="command-info">
-                      <div className="info-row">
-                        <span className="info-label">Command</span>
-                        <span className="info-value">{cmd.command} {cmd.args.join(' ')}</span>
-                      </div>
-                      {cmd.port && (
-                        <div className="info-row">
-                          <span className="info-label">Port</span>
-                          <span className="info-value">{cmd.port}</span>
-                        </div>
-                      )}
-                      {Object.entries(cmd.env || {}).length > 0 && (
-                        <div className="info-row">
-                          <span className="info-label">Environment</span>
-                          <div className="info-value">
-                            {Object.entries(cmd.env || {}).map(([key, value], i) => (
-                              <div key={key}>
-                                {key}={value}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                    <div className="command-actions">
-                      <button 
-                        className={`action-button ${isRunning ? 'stop' : 'start'}`}
-                        onClick={() => handleToggleCommand(cmd)}
-                      >
-                        {isRunning ? <VscDebugStop className="button-icon" /> : <VscDebugStart className="button-icon" />}
-                        {isRunning ? 'Stop' : 'Start'}
-                      </button>
-                      {isRunning && (
+                      <div className="command-actions">
                         <button 
-                          className="action-button secondary"
-                          onClick={() => setSelectedCommand(cmd.id)}
+                          className={`action-button ${isRunning ? 'stop' : 'start'}`}
+                          onClick={() => handleToggleCommand(cmd)}
                         >
-                          <VscTerminal className="button-icon" />
-                          Terminal
+                          {isRunning ? <VscDebugStop className="button-icon" /> : <VscDebugStart className="button-icon" />}
+                          {isRunning ? 'Stop' : 'Start'}
                         </button>
-                      )}
+                        {isRunning && (
+                          <button 
+                            className="action-button secondary"
+                            onClick={() => setSelectedCommand(cmd.id)}
+                          >
+                            <VscTerminal className="button-icon" />
+                            Terminal
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                 );
-              })}
-            </div>
-          </>
-        ) : activeView === 'settings' ? (
-          <Settings isVisible={true} />
-        ) : (
-          <ConfigEditor 
-            isVisible={true}
-            onClose={() => setActiveView('servers')}
-            onSave={handleSaveConfig}
-          />
-        )}
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          {activeView === 'settings' && (
+            <Settings isVisible={true} /> // Assuming Settings doesn't need header
+          )}
+          
+          {activeView === 'config' && (
+            <ConfigEditor 
+              ref={configEditorRef}
+              isVisible={true}
+              onClose={() => setActiveView('servers')} // Config editor close goes back to servers
+              onSave={handleSaveConfig}
+            /> // Assuming ConfigEditor doesn't need header
+          )}
+        </div> 
       </main>
 
+      {/* Terminal and AddCommandForm overlays remain outside main content */}
       {selectedCommand && (
         <Terminal
           commandId={selectedCommand}

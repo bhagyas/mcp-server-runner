@@ -41,7 +41,7 @@ export function Settings({ isVisible }: SettingsProps) {
     try {
       setIsLoading(true);
       setError(null);
-      const path = await invoke<string>("get_config_path");
+      const path = "/mock/path/to/mcp-config.json"; // Placeholder
       setConfigPath(path);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -53,7 +53,6 @@ export function Settings({ isVisible }: SettingsProps) {
   const handleSelectConfigPath = async () => {
     try {
       setError(null);
-      // First try to select a file
       let selected = await open({
         directory: false,
         multiple: false,
@@ -63,22 +62,19 @@ export function Settings({ isVisible }: SettingsProps) {
         }]
       });
 
-      // If user cancels file selection, try folder selection
       if (!selected) {
         selected = await open({
           directory: true,
           multiple: false
         });
-
-        // If folder selected, append config.json to the path
         if (selected && typeof selected === 'string') {
-          selected = await join(selected, 'config.json');
+          selected = selected + "/config.json"; // Basic join for example
         }
       }
 
       if (selected && typeof selected === 'string') {
-        await invoke<void>("set_config_path", { path: selected });
         setConfigPath(selected);
+        console.log("New config path selected (but not saved):", selected);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -89,13 +85,6 @@ export function Settings({ isVisible }: SettingsProps) {
 
   return (
     <div className="settings-content">
-      <div className="header">
-        <div>
-          <h1>Settings</h1>
-          <p className="subtitle">Configure your MCP Server Runner preferences.</p>
-        </div>
-      </div>
-
       <div className="settings-section">
         <h2>Configuration File</h2>
         <p className="section-description">
