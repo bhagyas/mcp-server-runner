@@ -5,7 +5,7 @@ import { AddMCPCommand as AddMCPCommandForm } from "./components/AddMCPCommand";
 import { Terminal } from "./components/Terminal";
 import { ConfigEditor, ConfigEditorRef } from "./components/ConfigEditor";
 import { Settings } from "./components/Settings";
-import { VscServer, VscSettingsGear, VscAdd, VscJson, VscTerminal, VscTrash, VscEdit, VscDebugStart, VscDebugStop, VscSave } from "react-icons/vsc";
+import { VscServer, VscSettingsGear, VscAdd, VscJson, VscTerminal, VscTrash, VscEdit, VscDebugStart, VscDebugStop, VscSave, VscInfo } from "react-icons/vsc";
 import "./App.css";
 
 interface CommandInfo {
@@ -426,9 +426,15 @@ function App() {
                           <span className="info-value">{cmd.command} {cmd.args.join(' ')}</span>
                         </div>
                         {cmd.port && (
-                          <div className="info-row">
+                          <div className="info-row tooltip-container">
                             <span className="info-label">Port</span>
-                            <span className="info-value">{cmd.port}</span>
+                            <span className="info-value">
+                              {cmd.port}
+                              <VscInfo className="info-icon tooltip-trigger" />
+                            </span>
+                            <span className="tooltip-text">
+                              For reference only. Does not affect executed command.
+                            </span>
                           </div>
                         )}
                         {Object.entries(cmd.env || {}).length > 0 && (

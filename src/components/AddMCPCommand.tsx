@@ -133,6 +133,9 @@ export function AddMCPCommand({ isVisible, onClose, onSubmit, editCommand }: Add
               min="1"
               max="65535"
             />
+            <p className="field-description">
+              For reference only. Does not modify the executed command.
+            </p>
           </div>
 
           <div className="form-group env-vars">
@@ -168,6 +171,7 @@ export function AddMCPCommand({ isVisible, onClose, onSubmit, editCommand }: Add
                 type="button" 
                 onClick={handleAddEnvVar}
                 disabled={!newEnvKey || !newEnvValue}
+                className="primary-button env-add-button"
               >
                 Add
               </button>
@@ -175,10 +179,10 @@ export function AddMCPCommand({ isVisible, onClose, onSubmit, editCommand }: Add
           </div>
           
           <div className="form-actions">
-            <button type="submit">
+            <button type="submit" className="primary-button">
               {editCommand ? 'Save Changes' : 'Add Command'}
             </button>
-            <button type="button" onClick={onClose}>
+            <button type="button" className="secondary-button" onClick={onClose}>
               Cancel
             </button>
           </div>
