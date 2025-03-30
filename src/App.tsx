@@ -21,6 +21,9 @@ type ActiveView = 'servers' | 'settings' | 'config';
 // A more robust solution would measure the actual element or pass height up
 const TERMINAL_APPROX_HEIGHT = '40vh'; 
 
+// Timeout for graceful stop before prompting for force kill (in milliseconds)
+const GRACEFUL_STOP_TIMEOUT = 5000; 
+
 function App() {
   const [commands, setCommands] = useState<MCPCommand[]>([]);
   const [commandInfo, setCommandInfo] = useState<Record<string, CommandInfo>>({});
@@ -31,10 +34,21 @@ function App() {
   const [isAddCommandFormOpen, setIsAddCommandFormOpen] = useState(false);
   const [activeView, setActiveView] = useState<ActiveView>('servers');
   const configEditorRef = useRef<ConfigEditorRef>(null);
+  // New state for commands attempting graceful stop
+  const [stoppingCommandIds, setStoppingCommandIds] = useState<Set<string>>(new Set());
+  // Ref to store timeout IDs for graceful stop
+  const stopTimersRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     loadConfig();
-  }, []);
+
+    // --- Cleanup Timers on Unmount ---
+    return () => {
+      console.log("App unmounting, clearing stop timers.");
+      Object.values(stopTimersRef.current).forEach(clearTimeout);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps 
+  }, []); // Run only on mount
 
   // Effect for polling running command statuses
   useEffect(() => {
@@ -42,20 +56,38 @@ function App() {
       const runningCommandIds = Object.entries(commandInfo)
         .filter(([_, info]) => info.is_running)
         .map(([id, _]) => id);
+      
+      // Also include commands that are in the 'stopping' phase in the poll
+      const idsToPoll = new Set([...runningCommandIds, ...stoppingCommandIds]);
 
-      if (runningCommandIds.length === 0) {
-        return; // No need to poll if nothing is marked as running
+      if (idsToPoll.size === 0) {
+        return; // No need to poll if nothing is running or stopping
       }
       
-      console.log(`Polling status for running commands: ${runningCommandIds.join(', ')}`);
+      console.log(`Polling status for commands: ${[...idsToPoll].join(', ')}`);
 
       const updates: Record<string, CommandInfo> = {};
       let stateChanged = false;
 
-      for (const id of runningCommandIds) {
+      for (const id of idsToPoll) {
         try {
           const latestInfo = await invoke<CommandInfo>("get_command_info", { id });
           updates[id] = latestInfo;
+
+          // --- Check if a stopping command has finished --- 
+          if (!latestInfo.is_running && stoppingCommandIds.has(id)) {
+            console.log(`Graceful stop for ${id} confirmed by poll. Clearing timer.`);
+            clearTimeout(stopTimersRef.current[id]);
+            delete stopTimersRef.current[id];
+            setStoppingCommandIds(prev => {
+              const newSet = new Set(prev);
+              newSet.delete(id);
+              return newSet;
+            });
+            stateChanged = true; // Ensure state update happens
+          }
+          // --- End stopping command check ---
+
           // Check if the running status actually changed compared to current state
           if (commandInfo[id]?.is_running !== latestInfo.is_running) {
               console.log(`Command ${id} status changed: Running=${latestInfo.is_running}, Error=${latestInfo.has_error}`);
@@ -64,10 +96,21 @@ function App() {
         } catch (err) {
           // Handle cases where the command might have been removed or backend error
           console.error(`Polling failed for command ${id}:`, err);
-          // Optionally mark as stopped/error in UI if fetch fails consistently
-          if(commandInfo[id]?.is_running) { // If it was running before the error
-             updates[id] = { ...commandInfo[id], is_running: false, has_error: true };
+          // If polling fails for a command we think is running or stopping, mark it as stopped/error
+          if(commandInfo[id]?.is_running || stoppingCommandIds.has(id)) { 
+             updates[id] = { ...(commandInfo[id] || { id, is_running: false, has_error: false }), is_running: false, has_error: true };
              stateChanged = true;
+             // Also clean up stopping state if polling fails
+             if (stoppingCommandIds.has(id)) {
+               console.warn(`Polling failed for stopping command ${id}. Clearing timer and stopping state.`);
+               clearTimeout(stopTimersRef.current[id]);
+               delete stopTimersRef.current[id];
+               setStoppingCommandIds(prev => {
+                 const newSet = new Set(prev);
+                 newSet.delete(id);
+                 return newSet;
+               });
+             }
           }
         }
       }
@@ -75,19 +118,17 @@ function App() {
       // Update state only if any relevant command status changed
       if (stateChanged) {
           console.log("Updating commandInfo and commands state due to poll results.");
-        setCommandInfo(prevInfo => ({
+        setCommandInfo(prevInfo => ({ // Update commandInfo first
           ...prevInfo,
           ...updates,
         }));
 
-        // Update the isRunning flag in the main commands list as well
-        setCommands(prevCmds => 
+        setCommands(prevCmds => // Then update commands based on fresh info
           prevCmds.map(cmd => {
             if (updates[cmd.id]) {
-              // If we have fresh info for this command from the poll
               return { ...cmd, isRunning: updates[cmd.id].is_running };
             }
-            return cmd; // Otherwise, keep the existing command state
+            return cmd;
           })
         );
       }
@@ -97,7 +138,8 @@ function App() {
     // Cleanup interval on component unmount
     return () => clearInterval(intervalId);
 
-  }, [commandInfo]); // Rerun effect if commandInfo changes (e.g., after start/stop)
+  // Include stoppingCommandIds in dependency array so polling loop restarts if it changes
+  }, [commandInfo, stoppingCommandIds]); 
 
   const loadConfig = async () => {
     try {
@@ -118,6 +160,9 @@ function App() {
       });
       setCommands(loadedCommands);
       setCommandInfo(initialInfo);
+      setStoppingCommandIds(new Set()); // Reset stopping state on load
+      Object.values(stopTimersRef.current).forEach(clearTimeout); // Clear any lingering timers
+      stopTimersRef.current = {};
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -149,9 +194,14 @@ function App() {
 
     try {
       setError(null);
+      // Make sure it's not running or stopping before edit
+      if (commandInfo[editingCommand.id]?.is_running || stoppingCommandIds.has(editingCommand.id)) {
+        setError(`Cannot edit server '${editingCommand.id}' while it is running or stopping.`);
+        return;
+      }
       await invoke<Config>("remove_server", { name: editingCommand.id });
       await invoke<Config>("add_server", {
-        name: editedCommand.name,
+        name: editedCommand.name, // Use potentially new name from edit form
         command: editedCommand.command,
         args: editedCommand.args,
         env: editedCommand.env,
@@ -170,9 +220,16 @@ function App() {
   const handleToggleCommand = async (cmd: MCPCommand) => {
     const cmdId = cmd.id;
     console.log(`Toggling command ${cmdId}... Current running state in UI:`, cmd.isRunning);
+    // Prevent toggle if already stopping gracefully
+    if (stoppingCommandIds.has(cmdId)) {
+      console.warn(`Command ${cmdId} is already in the process of stopping gracefully. Ignoring toggle.`);
+      return;
+    }
+
     try {
       setError(null);
       const currentBackendInfo = commandInfo[cmdId];
+      // Base 'isCurrentlyRunning' on commandInfo if available, otherwise fallback to cmd.isRunning
       const isCurrentlyRunning = currentBackendInfo ? currentBackendInfo.is_running : cmd.isRunning;
       
       let backendResponseInfo: CommandInfo;
@@ -183,22 +240,85 @@ function App() {
         wasStartAttempt = true;
         backendResponseInfo = await invoke<CommandInfo>("start_command", { id: cmdId });
         console.log(`Start command ${cmdId} backend response:`, backendResponseInfo);
-      } else {
-        console.log(`Attempting to stop command ${cmdId}`);
-        backendResponseInfo = await invoke<CommandInfo>("stop_command", { id: cmdId });
-         console.log(`Stop command ${cmdId} backend response:`, backendResponseInfo);
+      } else { // Attempt graceful stop
+        console.log(`Attempting graceful stop for command ${cmdId}`);
+        // Set stopping state *before* calling backend
+        setStoppingCommandIds(prev => new Set(prev).add(cmdId));
+        
+        backendResponseInfo = await invoke<CommandInfo>("stop_command", { id: cmdId }); // Call graceful stop
+        console.log(`Graceful stop command ${cmdId} backend response:`, backendResponseInfo);
+
+        // --- Start Timeout for Force Kill Prompt --- 
+        const timerId = setTimeout(async () => {
+          console.log(`Graceful stop timeout reached for ${cmdId}. Checking status...`);
+          // Check FRESH status directly via get_command_info after timeout
+          // Avoid relying on potentially stale commandInfo state here
+          let stillRunning = false;
+          try {
+            const freshInfo = await invoke<CommandInfo>("get_command_info", { id: cmdId });
+            stillRunning = freshInfo.is_running;
+            console.log(`Timeout check for ${cmdId}: Fresh status is_running=${stillRunning}`);
+          } catch (fetchErr) {
+            console.error(`Timeout check: Failed to get fresh info for ${cmdId}:`, fetchErr);
+            // Assume it might still be running or in an error state if fetch fails
+            stillRunning = true; 
+          }
+
+          // Only prompt if it's still considered running AND still in the stopping set
+          if (stillRunning && stoppingCommandIds.has(cmdId)) { 
+            console.log(`Command ${cmdId} still running after timeout. Prompting user.`);
+            const userConfirmedForceKill = await confirm(
+              `Process "${cmdId}" did not stop gracefully after ${GRACEFUL_STOP_TIMEOUT / 1000} seconds. Force kill?`,
+              { title: 'Force Kill Process?', okLabel: 'Force Kill', cancelLabel: 'Cancel' }
+            );
+
+            if (userConfirmedForceKill) {
+              console.log(`User confirmed force kill for ${cmdId}. Invoking force_kill_command.`);
+              try {
+                await invoke<CommandInfo>("force_kill_command", { id: cmdId });
+              } catch (forceKillErr) {
+                const errorMsg = forceKillErr instanceof Error ? forceKillErr.message : String(forceKillErr);
+                console.error(`Force kill command ${cmdId} failed:`, errorMsg);
+                setError(`Failed to force kill ${cmdId}: ${errorMsg}`);
+              }
+            } else {
+              console.log(`User cancelled force kill for ${cmdId}.`);
+            }
+          } else {
+            console.log(`Timeout check: Command ${cmdId} already stopped or removed from stopping state. No prompt needed.`);
+          }
+          
+          // --- Cleanup after timeout logic --- 
+          delete stopTimersRef.current[cmdId];
+          setStoppingCommandIds(prev => {
+            const newSet = new Set(prev);
+            newSet.delete(cmdId);
+            return newSet;
+          });
+          console.log(`Removed ${cmdId} from stopping state after timeout logic.`);
+          // --- End Cleanup --- 
+
+        }, GRACEFUL_STOP_TIMEOUT);
+        
+        stopTimersRef.current[cmdId] = timerId;
+        console.log(`Started graceful stop timer ${timerId} for ${cmdId}`);
+        // --- End Timeout --- 
       }
 
       // Update state based *only* on the backend response immediately after toggle
+      // For stop, backendResponseInfo still shows is_running=true, which is correct initially
       setCommandInfo(prev => ({ 
           ...prev, 
           [cmdId]: backendResponseInfo 
       }));
-      setCommands(prevCmds => prevCmds.map(c => 
-          c.id === cmdId ? { ...c, isRunning: backendResponseInfo.is_running } : c
-      ));
+      // Only update the main command list's isRunning if it was a start attempt
+      if (wasStartAttempt) {
+        setCommands(prevCmds => prevCmds.map(c => 
+            c.id === cmdId ? { ...c, isRunning: backendResponseInfo.is_running } : c
+        ));
+      }
 
-      // --- Auto-open terminal on successful start ---
+      // --- Auto-open terminal on successful start --- (Keep existing logic)
       if (wasStartAttempt && backendResponseInfo.is_running) {
         console.log(`Command ${cmdId} started successfully, opening terminal.`);
         setSelectedCommand(cmdId);
@@ -209,20 +329,32 @@ function App() {
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error(`Toggle command ${cmdId} failed:`, errorMsg);
       setError(errorMsg);
+      // If toggle failed, ensure it's removed from stopping state if it was added
+      if (stoppingCommandIds.has(cmdId)) {
+         console.warn(`Toggle failed for ${cmdId}, clearing timer and stopping state.`);
+         clearTimeout(stopTimersRef.current[cmdId]);
+         delete stopTimersRef.current[cmdId];
+         setStoppingCommandIds(prev => {
+           const newSet = new Set(prev);
+           newSet.delete(cmdId);
+           return newSet;
+         });
+      }
     }
   };
 
   const handleRemoveCommand = async (idToRemove: string) => {
     console.log("Attempting to remove command:", idToRemove);
-    // Ensure it's not running (already checked by button disable, but good practice)
-    if (commandInfo[idToRemove]?.is_running) {
-      setError("Cannot remove a running server.");
+    // Prevent removal if running OR in the process of stopping
+    if (commandInfo[idToRemove]?.is_running || stoppingCommandIds.has(idToRemove)) {
+      setError(`Cannot remove server '${idToRemove}' while it is running or stopping.`);
+      setOpenMenuId(null); // Close menu
       return;
     }
 
     // --- Confirmation Dialog --- 
     const userConfirmed = await confirm(
-      `Are you sure you want to remove the server "${idToRemove}"? This action cannot be undone.`, 
+      `Are you sure you want to remove the server "${idToRemove}"? This action cannot be undone.`,
       { title: 'Remove Server?', okLabel: 'Confirm', cancelLabel: 'Cancel' }
     );
 
@@ -298,6 +430,7 @@ function App() {
         await configEditorRef.current.save();
       } catch (error) {
         console.error("Save triggered from App failed.");
+        // Handle error appropriately in UI if needed
       }
     }
   };
@@ -389,15 +522,18 @@ function App() {
               {/* Command list specific to Servers view */}
               <div className="commands-list">
                 {commands.map((cmd) => {
-                  const currentInfo = commandInfo[cmd.id] || { is_running: false, has_error: false };
+                  const currentInfo = commandInfo[cmd.id] || { id: cmd.id, is_running: false, has_error: false };
                   const isRunning = currentInfo.is_running;
                   const hasError = currentInfo.has_error;
-                  const isDisabled = isRunning;
+                  const isStopping = stoppingCommandIds.has(cmd.id);
+                  // Disable edit/remove if running OR stopping
+                  const isMenuDisabled = isRunning || isStopping;
                   
                   return (
-                    <div key={cmd.id} className={`command-item ${hasError && !isRunning ? 'error-state' : ''}`}>
+                    <div key={cmd.id} className={`command-item ${hasError && !isRunning ? 'error-state' : ''} ${isStopping ? 'stopping-state' : ''}`}>
                       <div className="command-header">
                         <div className="command-name">
+                          {/* Status indicator reflects backend state (is_running), use stopping-state class for visual cue */}
                           <span className={`status-indicator ${isRunning ? 'running' : ''} ${hasError ? 'error' : ''}`} />
                           {cmd.name}
                         </div>
@@ -408,7 +544,7 @@ function App() {
                               e.stopPropagation();
                               setOpenMenuId(openMenuId === cmd.id ? null : cmd.id);
                             }}
-                            disabled={isRunning}
+                            disabled={isMenuDisabled} // Disable menu if running or stopping
                           >
                             <div className="menu-dots">⋮</div>
                           </button>
@@ -420,7 +556,7 @@ function App() {
                                   setIsAddCommandFormOpen(true);
                                   setOpenMenuId(null);
                                 }}
-                                disabled={isDisabled}
+                                disabled={isMenuDisabled} // Disable edit
                               >
                                 <VscEdit className="menu-icon" />
                                 Edit
@@ -428,7 +564,7 @@ function App() {
                               <button 
                                 className="delete"
                                 onClick={() => handleRemoveCommand(cmd.id)}
-                                disabled={isDisabled}
+                                disabled={isMenuDisabled} // Disable remove
                               >
                                 <VscTrash className="menu-icon" />
                                 Remove
@@ -458,7 +594,7 @@ function App() {
                           <div className="info-row">
                             <span className="info-label">Environment</span>
                             <div className="info-value">
-                              {Object.entries(cmd.env || {}).map(([key, value], i) => (
+                              {Object.entries(cmd.env || {}).map(([key, value]) => (
                                 <div key={key}>
                                   {key}={value}
                                 </div>
@@ -469,16 +605,33 @@ function App() {
                       </div>
                       <div className="command-actions">
                         <button 
-                          className={`action-button ${isRunning ? 'stop' : 'start'}`}
+                          className={`action-button ${isRunning ? (isStopping ? 'stopping' : 'stop') : 'start'}`}
                           onClick={() => handleToggleCommand(cmd)}
+                          disabled={isStopping} // Disable toggle button while stopping
                         >
-                          {isRunning ? <VscDebugStop className="button-icon" /> : <VscDebugStart className="button-icon" />}
-                          {isRunning ? 'Stop' : 'Start'}
+                          {isStopping ? (
+                            <>
+                              {/* Optional: Add a spinner icon here later */}
+                              <VscDebugStop className="button-icon" />
+                              Stopping...
+                            </>
+                          ) : isRunning ? (
+                            <>
+                              <VscDebugStop className="button-icon" />
+                              Stop
+                            </>
+                          ) : (
+                            <>
+                              <VscDebugStart className="button-icon" />
+                              Start
+                            </>
+                          )}
                         </button>
-                        {isRunning && (
+                        {(isRunning || isStopping) && ( // Show terminal button if running OR stopping
                           <button 
                             className="action-button secondary"
                             onClick={() => setSelectedCommand(cmd.id)}
+                            disabled={isStopping} // Optionally disable terminal button during stop attempt?
                           >
                             <VscTerminal className="button-icon" />
                             Terminal

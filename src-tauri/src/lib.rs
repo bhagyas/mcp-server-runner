@@ -7,6 +7,11 @@ use std::process::{Child, Stdio};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
+// Add nix imports for signals
+#[cfg(unix)]
+use nix::sys::signal::{self, Signal};
+#[cfg(unix)]
+use nix::unistd::Pid;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -46,42 +51,6 @@ impl ProcessStore {
         ProcessStore {
             inner: Arc::new(Mutex::new(HashMap::new())),
         }
-    }
-
-    fn cleanup_process(&self, id: &str) -> Result<(), String> {
-        let mut store = self.inner.lock().map_err(|e| e.to_string())?;
-        if let Some((child_arc, _)) = store.get(id) {
-            let mut child_option_guard = child_arc.lock().map_err(|e| format!("Failed to lock child arc: {}", e))?;
-            if let Some(mut child_instance) = child_option_guard.take() {
-                drop(child_option_guard);
-
-                if let Err(e) = child_instance.kill() {
-                    eprintln!("Failed to kill process {}: {}", id, e);
-                    if e.kind() != std::io::ErrorKind::InvalidInput {
-                        eprintln!("Non-fatal error killing process {}: {}", id, e);
-                    }
-                }
-                match child_instance.wait() {
-                    Ok(_) => {},
-                    Err(e) => {
-                        eprintln!("Failed to wait for process after kill {}: {}", id, e);
-                    }
-                }
-            } else {
-                drop(child_option_guard);
-                println!("Stop command: Child for {} already taken/exited.", id);
-            }
-            store.remove(id);
-        }
-        Ok(())
-    }
-
-    fn is_process_running(&self, id: &str) -> bool {
-        let store = self.inner.lock().unwrap_or_else(|e| {
-            eprintln!("Failed to lock process store: {}", e);
-            e.into_inner()
-        });
-        store.get(id).map_or(false, |(_, info)| info.is_running)
     }
 }
 
@@ -310,7 +279,7 @@ async fn start_command(
             if let Ok(mut output) = output_store_clone.lock() {
                 if let Some(lines) = output.get_mut(&id_clone) {
                     let message = match status_result {
-                        Ok(status) => format!("Process exited with status: {}", exit_code),
+                        Ok(_status) => format!("Process exited with status: {}", exit_code),
                         Err(e) => format!("Error waiting for process exit: {}", e),
                     };
                     lines.push(message);
@@ -396,13 +365,96 @@ async fn stop_command(
     id: String,
     process_store: State<'_, ProcessStore>,
 ) -> Result<CommandInfo, String> {
-    process_store.cleanup_process(&id)?;
+    let store_guard = process_store.inner.lock().map_err(|e| e.to_string())?;
     
-    Ok(CommandInfo {
-        id: id.clone(),
-        is_running: false,
-        has_error: false,
-    })
+    if let Some((child_arc, info)) = store_guard.get(&id) {
+        println!("Graceful stop requested for: {}", id);
+        
+        let child_option_guard = child_arc.lock().map_err(|e| format!("Stop: Failed to lock child arc for {}: {}", id, e))?;
+        
+        if let Some(child_instance) = child_option_guard.as_ref() { // Borrow without taking
+             let pid = child_instance.id() as i32; // Get process ID
+
+            #[cfg(unix)]
+            {
+                let os_pid = Pid::from_raw(pid);
+                match signal::kill(os_pid, Signal::SIGTERM) {
+                    Ok(_) => println!("Graceful stop: Sent SIGTERM to process {}.", id),
+                    Err(e) => eprintln!("Graceful stop: Failed to send SIGTERM to process {}: {}", id, e),
+                }
+            }
+
+            #[cfg(windows)]
+            {
+                // On Windows, sending SIGTERM isn't directly supported by standard libraries easily.
+                // We'll rely on the force_kill_command if the process doesn't exit.
+                println!("Graceful stop: Requested on Windows for process {}. Relying on process self-termination or eventual force kill.", id);
+                // Could potentially use winapi::um::wincon::GenerateConsoleCtrlEvent here later
+            }
+
+        } else {
+            println!("Graceful stop: Child process for {} was already taken/exited.", id);
+            // Return current info even if already exited, monitor will finalize state
+        }
+        
+        // Release child lock explicitly before returning info
+        drop(child_option_guard);
+
+        // Return the *current* info. Frontend handles "Stopping..." state.
+        // Monitor thread will update is_running later when process actually exits.
+        println!("Graceful stop: Returning current info for {}: is_running={}, has_error={}", id, info.is_running, info.has_error);
+        Ok(info.clone())
+
+    } else {
+        Err(format!("Graceful stop: Command '{}' not found in process store.", id))
+    }
+    // store_guard is released here
+}
+
+#[tauri::command]
+async fn force_kill_command(
+    id: String,
+    process_store: State<'_, ProcessStore>,
+) -> Result<CommandInfo, String> {
+    let store_guard = process_store.inner.lock().map_err(|e| e.to_string())?;
+
+    if let Some((child_arc, info)) = store_guard.get(&id) {
+        println!("Force kill command invoked for: {}", id);
+
+        // Lock the specific child's mutex to attempt kill
+        let mut child_option_guard = child_arc.lock().map_err(|e| format!("ForceKill: Failed to lock child arc for {}: {}", id, e))?;
+
+        if let Some(child_instance) = child_option_guard.as_mut() { // Borrow mutably without taking
+            println!("ForceKill: Found child process for {}, attempting kill.", id);
+            match child_instance.kill() {
+                Ok(_) => println!("ForceKill: Kill signal sent successfully to process {}.", id),
+                Err(e) => {
+                    // Process might have already exited between check and kill
+                    if e.kind() == std::io::ErrorKind::InvalidInput {
+                        println!("ForceKill: Process {} likely already exited (InvalidInput on kill).", id);
+                    } else {
+                        // Log other kill errors but proceed, maybe it's already stopping
+                        eprintln!("ForceKill: Error sending kill signal to {}: {}", id, e);
+                        // We still return the current info; monitor thread handles final state.
+                    }
+                }
+            }
+        } else {
+            // Child was already taken (likely by monitor thread because it exited)
+            println!("ForceKill: Child process for {} was already taken/exited.", id);
+        }
+
+        // Release child lock explicitly before returning info
+        drop(child_option_guard);
+
+        // Return the *current* info. The monitor thread will update is_running later.
+        println!("ForceKill: Returning current info for {}: is_running={}, has_error={}", id, info.is_running, info.has_error);
+        Ok(info.clone())
+
+    } else {
+        Err(format!("ForceKill: Command '{}' not found in process store.", id))
+    }
+    // store_guard is released here
 }
 
 #[tauri::command]
@@ -477,6 +529,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_command,
             stop_command,
+            force_kill_command,
             load_config,
             save_config,
             add_server,
