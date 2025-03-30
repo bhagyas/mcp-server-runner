@@ -1,0 +1,41 @@
+---
+description: This contains the decisions that have been made along the way.
+globs: 
+alwaysApply: false
+---
+---
+description: This contains the decisions that have been made along the way.
+globs: 
+alwaysApply: false
+---
+
+# UI Layout Decisions
+
+1. Navigation Structure
+   - Sidebar with "Servers" and "Settings" navigation items
+   - Main content area for displaying server list and settings
+
+2. Panel and Modal Behaviors
+   - Add/Edit Server form: Slides in from the right as a side panel
+   - Terminal: Slides up from the bottom
+   - Configuration Editor: Centered popup modal (90% viewport size with max dimensions)
+
+3. Button Placement
+   - "Add Server" and "Edit Configuration" as separate buttons in header
+   - "Add Server" opens side panel
+   - "Edit Configuration" opens modal popup
+
+4. Visual Design
+   - Replaced emojis with VS Code icons from react-icons/vsc
+   - Set minimum font size to system default (1rem) for better readability
+   - Used consistent padding and spacing throughout
+   - Implemented proper z-index layering for overlays
+
+5. Component Styling
+   - Side panel: 450px width, full height
+   - Config Editor Modal: 90% viewport width/height (max 1200px/800px)
+   - Terminal: Full width, dynamic height from bottom
+
+6. State Management
+   - Separate state controls for Add Server panel and Config Editor, as well as terminal
+   - Independent open/close functionality for each panel

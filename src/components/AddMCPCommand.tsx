@@ -2,13 +2,13 @@ import { useState, useEffect } from 'react';
 import type { AddMCPCommand as AddMCPCommandType, MCPCommand } from '../types/mcp';
 
 interface AddMCPCommandProps {
-  onAdd: (command: AddMCPCommandType) => void;
-  editCommand: MCPCommand | null;
-  onEdit: (command: MCPCommand) => void;
-  onCancelEdit: () => void;
+  isVisible: boolean;
+  onClose: () => void;
+  onSubmit: (command: AddMCPCommandType) => void;
+  editCommand?: MCPCommand | null;
 }
 
-export function AddMCPCommand({ onAdd, editCommand, onEdit, onCancelEdit }: AddMCPCommandProps) {
+export function AddMCPCommand({ isVisible, onClose, onSubmit, editCommand }: AddMCPCommandProps) {
   const [name, setName] = useState('');
   const [command, setCommand] = useState('');
   const [args, setArgs] = useState('');
@@ -46,15 +46,8 @@ export function AddMCPCommand({ onAdd, editCommand, onEdit, onCancelEdit }: AddM
       port: port ? parseInt(port, 10) : undefined
     };
 
-    if (editCommand) {
-      onEdit({
-        ...commandData,
-        id: editCommand.id,
-        isRunning: editCommand.isRunning
-      });
-    } else {
-      onAdd(commandData);
-    }
+    onSubmit(commandData);
+    onClose();
 
     // Clear form
     setName('');
@@ -86,103 +79,111 @@ export function AddMCPCommand({ onAdd, editCommand, onEdit, onCancelEdit }: AddM
     });
   };
 
+  if (!isVisible) return null;
+
   return (
-    <form onSubmit={handleSubmit} className="add-command-form">
-      <div className="form-group">
-        <label htmlFor="name">Name:</label>
-        <input
-          id="name"
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          required
-        />
-      </div>
-      
-      <div className="form-group">
-        <label htmlFor="command">Command:</label>
-        <input
-          id="command"
-          type="text"
-          value={command}
-          onChange={(e) => setCommand(e.target.value)}
-          required
-        />
-      </div>
-      
-      <div className="form-group">
-        <label htmlFor="args">Arguments (space separated):</label>
-        <input
-          id="args"
-          type="text"
-          value={args}
-          onChange={(e) => setArgs(e.target.value)}
-          placeholder="e.g. --port 3000 --host localhost"
-        />
-      </div>
+    <div className="side-panel-overlay">
+      <div className={`side-panel ${isVisible ? 'visible' : ''}`}>
+        <div className="modal-header">
+          <h2>{editCommand ? 'Edit Command' : 'Add New Command'}</h2>
+          <button className="close-button" onClick={onClose}>×</button>
+        </div>
+        <form onSubmit={handleSubmit} className="add-command-form">
+          <div className="form-group">
+            <label htmlFor="name">Name:</label>
+            <input
+              id="name"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+            />
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="command">Command:</label>
+            <input
+              id="command"
+              type="text"
+              value={command}
+              onChange={(e) => setCommand(e.target.value)}
+              required
+            />
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="args">Arguments (space separated):</label>
+            <input
+              id="args"
+              type="text"
+              value={args}
+              onChange={(e) => setArgs(e.target.value)}
+              placeholder="e.g. --port 3000 --host localhost"
+            />
+          </div>
 
-      <div className="form-group">
-        <label htmlFor="port">Port (optional):</label>
-        <input
-          id="port"
-          type="number"
-          value={port}
-          onChange={(e) => setPort(e.target.value)}
-          placeholder="e.g. 3000"
-          min="1"
-          max="65535"
-        />
-      </div>
+          <div className="form-group">
+            <label htmlFor="port">Port (optional):</label>
+            <input
+              id="port"
+              type="number"
+              value={port}
+              onChange={(e) => setPort(e.target.value)}
+              placeholder="e.g. 3000"
+              min="1"
+              max="65535"
+            />
+          </div>
 
-      <div className="form-group env-vars">
-        <label>Environment Variables:</label>
-        <div className="env-vars-list">
-          {Object.entries(envVars).map(([key, value]) => (
-            <div key={key} className="env-var-item">
-              <span>{key}={value}</span>
+          <div className="form-group env-vars">
+            <label>Environment Variables:</label>
+            <div className="env-vars-list">
+              {Object.entries(envVars).map(([key, value]) => (
+                <div key={key} className="env-var-item">
+                  <span>{key}={value}</span>
+                  <button 
+                    type="button" 
+                    onClick={() => handleRemoveEnvVar(key)}
+                    className="remove-env-var"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="add-env-var">
+              <input
+                type="text"
+                value={newEnvKey}
+                onChange={(e) => setNewEnvKey(e.target.value)}
+                placeholder="KEY"
+              />
+              <input
+                type="text"
+                value={newEnvValue}
+                onChange={(e) => setNewEnvValue(e.target.value)}
+                placeholder="VALUE"
+              />
               <button 
                 type="button" 
-                onClick={() => handleRemoveEnvVar(key)}
-                className="remove-env-var"
+                onClick={handleAddEnvVar}
+                disabled={!newEnvKey || !newEnvValue}
               >
-                ×
+                Add
               </button>
             </div>
-          ))}
-        </div>
-        <div className="add-env-var">
-          <input
-            type="text"
-            value={newEnvKey}
-            onChange={(e) => setNewEnvKey(e.target.value)}
-            placeholder="KEY"
-          />
-          <input
-            type="text"
-            value={newEnvValue}
-            onChange={(e) => setNewEnvValue(e.target.value)}
-            placeholder="VALUE"
-          />
-          <button 
-            type="button" 
-            onClick={handleAddEnvVar}
-            disabled={!newEnvKey || !newEnvValue}
-          >
-            Add
-          </button>
-        </div>
+          </div>
+          
+          <div className="form-actions">
+            <button type="submit">
+              {editCommand ? 'Save Changes' : 'Add Command'}
+            </button>
+            <button type="button" onClick={onClose}>
+              Cancel
+            </button>
+          </div>
+        </form>
       </div>
-      
-      <div className="form-actions">
-        <button type="submit">
-          {editCommand ? 'Save Changes' : 'Add Command'}
-        </button>
-        {editCommand && (
-          <button type="button" onClick={onCancelEdit}>
-            Cancel
-          </button>
-        )}
-      </div>
-    </form>
+    </div>
   );
 } 

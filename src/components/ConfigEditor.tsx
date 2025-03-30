@@ -8,7 +8,7 @@ interface ConfigEditorProps {
   onSave: (config: Config) => void;
 }
 
-export function ConfigEditor({ isVisible, onClose, onSave }: ConfigEditorProps) {
+export function ConfigEditor({ isVisible, onSave }: ConfigEditorProps) {
   const [configText, setConfigText] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -24,7 +24,7 @@ export function ConfigEditor({ isVisible, onClose, onSave }: ConfigEditorProps) 
       setConfigText(JSON.stringify(config, null, 2));
       setError(null);
     } catch (err) {
-      setError(err as string);
+      setError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -33,12 +33,11 @@ export function ConfigEditor({ isVisible, onClose, onSave }: ConfigEditorProps) 
       const config = JSON.parse(configText);
       setError(null);
       await onSave(config);
-      onClose();
     } catch (err) {
       if (err instanceof SyntaxError) {
         setError('Invalid JSON format');
       } else {
-        setError(err as string);
+        setError(err instanceof Error ? err.message : String(err));
       }
     }
   };
@@ -46,26 +45,32 @@ export function ConfigEditor({ isVisible, onClose, onSave }: ConfigEditorProps) 
   if (!isVisible) return null;
 
   return (
-    <div className="terminal-overlay">
-      <div className="config-editor">
-        <div className="config-editor-header">
-          <h3>Edit Configuration</h3>
-          <div className="config-editor-actions">
-            <button onClick={handleSave}>Save</button>
-            <button onClick={onClose}>Close</button>
-          </div>
+    <div className="config-editor-view">
+      <div className="header">
+        <div>
+          <h1>Configuration</h1>
+          <p className="subtitle">Edit your MCP Server Runner configuration</p>
         </div>
-        <div className="config-editor-content">
-          {error && <div className="error-message">{error}</div>}
-          <textarea
-            value={configText}
-            onChange={(e) => setConfigText(e.target.value)}
-            spellCheck={false}
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="off"
-          />
+        <div className="header-actions">
+          <button className="primary-button" onClick={handleSave}>
+            Save Changes
+          </button>
         </div>
+      </div>
+
+      {error && (
+        <div className="error-message">
+          {error}
+        </div>
+      )}
+
+      <div className="config-editor-content">
+        <textarea
+          value={configText}
+          onChange={(e) => setConfigText(e.target.value)}
+          placeholder="Loading configuration..."
+          spellCheck={false}
+        />
       </div>
     </div>
   );

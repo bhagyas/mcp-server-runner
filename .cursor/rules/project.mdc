@@ -1,5 +1,5 @@
 ---
-description: 
+description: Understanding the application and framework tools
 globs: 
 alwaysApply: false
 ---
@@ -12,3 +12,5 @@ The application lets you add commands such as 'npx @agentdeskai/browser-tools-se
 
 - Always add the crates if required or missing.
 - It is built with tauri, so Typescript and Rust.
+- This uses tauri 2.0, NOT 1.x
+- Use the tauri documentation from https://v2.tauri.app/
