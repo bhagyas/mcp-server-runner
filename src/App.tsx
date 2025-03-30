@@ -30,6 +30,69 @@ function App() {
     loadConfig();
   }, []);
 
+  // Effect for polling running command statuses
+  useEffect(() => {
+    const intervalId = setInterval(async () => {
+      const runningCommandIds = Object.entries(commandInfo)
+        .filter(([_, info]) => info.is_running)
+        .map(([id, _]) => id);
+
+      if (runningCommandIds.length === 0) {
+        return; // No need to poll if nothing is marked as running
+      }
+      
+      console.log(`Polling status for running commands: ${runningCommandIds.join(', ')}`);
+
+      const updates: Record<string, CommandInfo> = {};
+      let stateChanged = false;
+
+      for (const id of runningCommandIds) {
+        try {
+          const latestInfo = await invoke<CommandInfo>("get_command_info", { id });
+          updates[id] = latestInfo;
+          // Check if the running status actually changed compared to current state
+          if (commandInfo[id]?.is_running !== latestInfo.is_running) {
+              console.log(`Command ${id} status changed: Running=${latestInfo.is_running}, Error=${latestInfo.has_error}`);
+            stateChanged = true;
+          }
+        } catch (err) {
+          // Handle cases where the command might have been removed or backend error
+          console.error(`Polling failed for command ${id}:`, err);
+          // Optionally mark as stopped/error in UI if fetch fails consistently
+          if(commandInfo[id]?.is_running) { // If it was running before the error
+             updates[id] = { ...commandInfo[id], is_running: false, has_error: true };
+             stateChanged = true;
+          }
+        }
+      }
+
+      // Update state only if any relevant command status changed
+      if (stateChanged) {
+          console.log("Updating commandInfo and commands state due to poll results.");
+        setCommandInfo(prevInfo => ({
+          ...prevInfo,
+          ...updates,
+        }));
+
+        // Update the isRunning flag in the main commands list as well
+        setCommands(prevCmds => 
+          prevCmds.map(cmd => {
+            if (updates[cmd.id]) {
+              // If we have fresh info for this command from the poll
+              return { ...cmd, isRunning: updates[cmd.id].is_running };
+            }
+            return cmd; // Otherwise, keep the existing command state
+          })
+        );
+      }
+
+    }, 2000); // Poll every 2 seconds
+
+    // Cleanup interval on component unmount
+    return () => clearInterval(intervalId);
+
+  }, [commandInfo]); // Rerun effect if commandInfo changes (e.g., after start/stop)
+
   const loadConfig = async () => {
     try {
       setError(null);
@@ -103,8 +166,6 @@ function App() {
     console.log(`Toggling command ${cmdId}... Current running state in UI:`, cmd.isRunning);
     try {
       setError(null);
-      // Determine action based on current *backend* state if available, 
-      // otherwise fallback to UI state (cmd.isRunning)
       const currentBackendInfo = commandInfo[cmdId];
       const isCurrentlyRunning = currentBackendInfo ? currentBackendInfo.is_running : cmd.isRunning;
       
@@ -120,7 +181,7 @@ function App() {
          console.log(`Stop command ${cmdId} backend response:`, backendResponseInfo);
       }
 
-      // Update state based *only* on the backend response
+      // Update state based *only* on the backend response immediately after toggle
       setCommandInfo(prev => ({ 
           ...prev, 
           [cmdId]: backendResponseInfo 
