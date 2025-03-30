@@ -16,6 +16,10 @@ interface CommandInfo {
 
 type ActiveView = 'servers' | 'settings' | 'config';
 
+// Approx height of the terminal based on CSS (40vh)
+// A more robust solution would measure the actual element or pass height up
+const TERMINAL_APPROX_HEIGHT = '40vh'; 
+
 function App() {
   const [commands, setCommands] = useState<MCPCommand[]>([]);
   const [commandInfo, setCommandInfo] = useState<Record<string, CommandInfo>>({});
@@ -310,7 +314,13 @@ function App() {
         </nav>
       </aside>
 
-      <main className="main-content">
+      <main 
+        className="main-content"
+        style={{
+          paddingBottom: selectedCommand ? `calc(${TERMINAL_APPROX_HEIGHT} + 2rem)` : '2rem',
+          // Add small extra padding (e.g., 2rem) to the terminal height
+        }}
+      >
         {/* --- Shared Header --- */}
         <div className="header">
           <div>
@@ -341,7 +351,7 @@ function App() {
         )}
 
         {/* --- View Specific Content --- */}
-        <div className="view-content">
+        <div className="view-content-area">
           {activeView === 'servers' && (
             <>
               {/* Stats container specific to Servers view */}

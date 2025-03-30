@@ -143,6 +143,7 @@ body {
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 1rem;
   margin-bottom: 1.5rem;
+  flex-shrink: 0;
 }
 
 .stat-item {
@@ -174,13 +175,23 @@ body {
   flex-grow: 1;
   overflow-y: auto;
   min-height: 0;
+
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+  align-content: start;
+}
+
+@media (max-width: 900px) {
+  .commands-list {
+    grid-template-columns: 1fr;
+  }
 }
 
 .command-item {
   background: var(--background-secondary);
   border-radius: 8px;
   padding: 1.25rem;
-  margin-bottom: 1rem;
   box-shadow: 0 2px 4px rgba(0,0,0,0.05);
   transition: box-shadow 0.2s ease;
   border: 1px solid var(--border-color);
@@ -198,9 +209,10 @@ body {
 .command-name {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  font-weight: 500;
-  font-size: 0.875rem;
+  gap: 0.75rem;
+  font-weight: 600;
+  font-size: 1.1rem;
+  color: var(--text-primary);
 }
 
 .status-indicator {
@@ -1290,22 +1302,26 @@ button {
   color: var(--text-primary);
 }
 
-.view-content {
+.view-content-area {
   flex-grow: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;
   margin-top: 1.5rem;
+  overflow: hidden;
 }
 
-.view-actions {
-  margin-bottom: 1.5rem;
+.view-content-area > .settings-content,
+.view-content-area > .config-editor-content,
+.view-content-area > .servers-view-wrapper {
+  flex-grow: 1;
   display: flex;
-  gap: 0.5rem;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .stats-container {
-  margin-bottom: 1.5rem;
+  flex-shrink: 0;
 }
 
 .commands-list {
@@ -1337,9 +1353,10 @@ button {
 .command-name {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  font-weight: 500;
-  font-size: 0.875rem;
+  gap: 0.75rem;
+  font-weight: 600;
+  font-size: 1.1rem;
+  color: var(--text-primary);
 }
 
 .status-indicator {
@@ -2427,11 +2444,4 @@ button {
   font-size: 1.5rem;
   font-weight: 600;
   color: var(--text-primary);
-}
-
-.view-content > .config-editor-wrapper,
-.view-content > .settings-wrapper {
-  flex-grow: 1;
-  display: flex;
-  flex-direction: column;
 }
