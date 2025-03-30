@@ -259,19 +259,80 @@ body {
   margin-bottom: 0.5rem;
   font-size: 1rem;
   line-height: 1.4;
+  align-items: flex-start;
 }
 
 .info-label {
   color: var(--text-secondary);
   min-width: 80px;
+  flex-shrink: 0;
+  padding-top: 0;
 }
 
 .info-value {
   font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
   color: var(--text-primary);
-  display: flex;
+  flex-grow: 1;
+  word-break: break-all;
+}
+
+.info-value > div {
+  margin-bottom: 0.2rem;
+}
+
+.tooltip-container {
+  position: relative;
+}
+
+.tooltip-container > .info-value {
+  display: inline-flex;
   align-items: center;
   gap: 0.35rem;
+  flex-grow: 0;
+  word-break: normal;
+}
+
+.info-icon {
+  color: var(--text-secondary);
+  cursor: help;
+  font-size: 0.9em;
+}
+
+.tooltip-text {
+  visibility: hidden;
+  width: 180px;
+  background-color: #333;
+  color: #fff;
+  text-align: center;
+  border-radius: 6px;
+  padding: 5px 8px;
+  position: absolute;
+  z-index: 10;
+  bottom: 125%;
+  left: 50%;
+  margin-left: -90px;
+  opacity: 0;
+  transition: opacity 0.3s;
+  font-size: 0.8rem;
+  font-family: inherit;
+  white-space: normal;
+}
+
+.tooltip-text::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin-left: -5px;
+  border-width: 5px;
+  border-style: solid;
+  border-color: #333 transparent transparent transparent;
+}
+
+.tooltip-container:hover .tooltip-text,
+.tooltip-trigger:hover + .tooltip-text {
+  visibility: visible;
+  opacity: 1;
 }
 
 .error-message {
@@ -1318,14 +1379,12 @@ button {
 /* Tooltip Styles */
 .tooltip-container {
   position: relative;
-  display: inline-flex;
 }
 
 .info-icon {
   color: var(--text-secondary);
   cursor: help;
   font-size: 0.9em;
-  vertical-align: middle;
 }
 
 .tooltip-text {
