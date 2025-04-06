@@ -4,7 +4,6 @@ import { invoke } from "@tauri-apps/api/core";
 interface TerminalProps {
   commandId: string;
   isVisible: boolean;
-  onClose: () => void;
 }
 
 interface CommandInfo {
@@ -13,7 +12,7 @@ interface CommandInfo {
   has_error: boolean;
 }
 
-export function Terminal({ commandId, isVisible, onClose }: TerminalProps) {
+export function Terminal({ commandId, isVisible }: TerminalProps) {
   const [output, setOutput] = useState<string[]>([]);
   const [commandInfo, setCommandInfo] = useState<CommandInfo | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -112,7 +111,7 @@ export function Terminal({ commandId, isVisible, onClose }: TerminalProps) {
   if (!isVisible) return null;
 
   return (
-    <div className="terminal-overlay" ref={overlayRef}>
+    <div className="terminal-overlay-inner" ref={overlayRef}>
       <div className="terminal-resize-handle" onMouseDown={handleMouseDown} />
       <div className="terminal-window">
         <div className="terminal-header" onMouseDown={handleMouseDown}>
@@ -122,7 +121,6 @@ export function Terminal({ commandId, isVisible, onClose }: TerminalProps) {
               <span className={`status-indicator ${commandInfo.is_running ? 'running' : ''} ${commandInfo.has_error ? 'error' : ''}`} />
             )}
           </h3>
-          <button className="terminal-close" onClick={onClose}>×</button>
         </div>
         <div 
           className="terminal-content" 

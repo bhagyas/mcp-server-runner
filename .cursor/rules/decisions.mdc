@@ -3,11 +3,6 @@ description: This contains the decisions that have been made along the way.
 globs: 
 alwaysApply: false
 ---
----
-description: This contains the decisions that have been made along the way.
-globs: 
-alwaysApply: false
----
 
 # UI Layout Decisions
 
@@ -37,5 +32,5 @@ alwaysApply: false
    - Terminal: Full width, dynamic height from bottom
 
 6. State Management
-   - Separate state controls for Add Server panel and Config Editor, as well as terminal
+   - Separate state controls for Add Server panel and Config Editor
    - Independent open/close functionality for each panel

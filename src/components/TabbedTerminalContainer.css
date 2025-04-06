@@ -1,0 +1,134 @@
+:root {
+  --terminal-tab-height: 36px;
+  --terminal-tab-background: var(--background-secondary); /* Match terminal header */
+  --terminal-tab-color: var(--text-secondary);
+  --terminal-tab-active-background: var(--background-primary); /* Match terminal content */
+  --terminal-tab-active-color: var(--text-primary);
+  --terminal-tab-border: var(--border-color);
+  --terminal-tab-hover-background: rgba(255, 255, 255, 0.05); 
+  --terminal-tab-close-hover-background: rgba(255, 255, 255, 0.1);
+}
+
+/* Main container for tabs + terminal content */
+.tabbed-terminal-overlay {
+  position: fixed;
+  left: var(--sidebar-width); /* Align with main content */
+  right: 0;
+  bottom: 0;
+  height: 40vh; /* Default height, can be made dynamic later if needed */
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--terminal-tab-active-background); /* Content area background */
+  border-top: 1px solid var(--terminal-tab-border);
+  z-index: 998; /* Slightly below modals */
+}
+
+.terminal-tab-bar {
+  display: flex;
+  align-items: stretch; /* Make tabs fill height */
+  height: var(--terminal-tab-height);
+  background-color: var(--terminal-tab-background);
+  border-bottom: 1px solid var(--terminal-tab-border);
+  flex-shrink: 0; /* Prevent shrinking */
+  overflow-x: auto; /* Allow scrolling if too many tabs */
+  scrollbar-width: thin; /* For Firefox */
+}
+
+.terminal-tab-bar::-webkit-scrollbar {
+  height: 4px;
+}
+ 
+.terminal-tab-bar::-webkit-scrollbar-thumb {
+  background-color: var(--text-secondary);
+  border-radius: 2px;
+}
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 1rem;
+  border: none;
+  border-right: 1px solid var(--terminal-tab-border);
+  background-color: transparent; /* Inherit from bar */
+  color: var(--terminal-tab-color);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background-color 0.2s, color 0.2s;
+  flex-shrink: 0; /* Prevent tabs from shrinking */
+  white-space: nowrap; /* Prevent text wrapping */
+  gap: 0.75rem;
+}
+
+.tab-item:hover {
+  background-color: var(--terminal-tab-hover-background);
+  color: var(--terminal-tab-active-color);
+}
+
+.tab-item.active {
+  background-color: var(--terminal-tab-active-background);
+  color: var(--terminal-tab-active-color);
+  border-bottom: 1px solid transparent; /* Hide bottom border of active tab */
+  position: relative; /* To potentially position pseudo-elements later if needed */
+  /* Make active tab look connected to content */
+  margin-bottom: -1px; 
+}
+
+.tab-close-btn {
+  font-size: 1.1em;
+  color: var(--terminal-tab-color);
+  background: none;
+  border: none;
+  padding: 0.25rem;
+  margin-left: 0.5rem; /* Space from text */
+  border-radius: 4px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
+  transition: background-color 0.2s, color 0.2s, opacity 0.2s;
+}
+
+.tab-item:hover .tab-close-btn,
+.tab-item.active .tab-close-btn {
+   opacity: 1;
+}
+
+.tab-close-btn:hover {
+  background-color: var(--terminal-tab-close-hover-background);
+  color: var(--terminal-tab-active-color);
+}
+
+/* The area holding the actual Terminal component */
+.terminal-content-area {
+  flex-grow: 1; /* Take remaining space */
+  overflow: hidden; /* Prevent content overflow */
+  /* Terminal component itself will handle internal scrolling */
+}
+
+/* Adjust Terminal styling slightly when inside tabs */
+/* We might need to remove the Terminal's own overlay/border */
+.tabbed-terminal-overlay .terminal-overlay-inner {
+  /* Override positioning/borders if needed */
+  position: static;
+  border: none;
+  height: 100%; /* Fill the content area */
+  width: 100%;
+}
+
+.tabbed-terminal-overlay .terminal-window {
+  height: 100%; /* Ensure window fills inner overlay */
+}
+
+/* Remove the top resize handle from Terminal when tabbed */
+.tabbed-terminal-overlay .terminal-resize-handle {
+  display: none;
+}
+
+/* Adjust header padding/border if needed */
+.tabbed-terminal-overlay .terminal-header {
+  /* border-top: none; Maybe? Test visually */
+  cursor: default; /* No longer used for resizing */
+} 
