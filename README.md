@@ -1,7 +1,12 @@
-# Tauri + React + Typescript
+# MCP Server Runner - One management UI for all your MCP Servers 
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
 
-## Recommended IDE Setup
+MCP Server Runner is a powerful and intuitive tool designed to simplify the management of multiple MCP (Model Context Protocol Server) instances.
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+With MCP Server Runner, managing your MCP servers has never been easier. 
+
+## Author
+Bhagya Silva (github.com/bhagyas)
+
+## Inspiration
+This project is inspired by Docker Desktop.

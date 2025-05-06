@@ -6,13 +6,26 @@ import { AddMCPCommand as AddMCPCommandForm } from "./components/AddMCPCommand";
 import { TabbedTerminalContainer } from "./components/TabbedTerminalContainer";
 import { ConfigEditor, ConfigEditorRef } from "./components/ConfigEditor";
 import { Settings } from "./components/Settings";
-import { VscServer, VscSettingsGear, VscAdd, VscJson, VscTerminal, VscTrash, VscEdit, VscDebugStart, VscDebugStop, VscSave, VscInfo } from "react-icons/vsc";
+import { VscServer, VscSettingsGear, VscAdd, VscJson, VscTerminal, VscTrash, VscEdit, VscDebugStart, VscDebugStop, VscSave, VscStopCircle } from "react-icons/vsc";
 import "./App.css";
 
+// Define the richer CommandStatus enum (mirroring hypothetical backend)
+// This still assumes the backend sends this structure via get_command_info
+type CommandStatus =
+  | { state: 'Idle' }
+  | { state: 'Starting' }
+  | { state: 'Running' }
+  | { state: 'Stopping' }
+  | { state: 'Killing' }
+  | { state: 'Finished'; code: number | null; success: boolean }
+  | { state: 'Error'; message: string };
+
+// Update CommandInfo interface (used for the polled state)
 interface CommandInfo {
   id: string;
-  is_running: boolean;
-  has_error: boolean;
+  status: CommandStatus;
+  process_id?: number;
+  port?: number;
 }
 
 type ActiveView = 'servers' | 'settings' | 'config';
@@ -35,12 +48,7 @@ function App() {
   const [isAddCommandFormOpen, setIsAddCommandFormOpen] = useState(false);
   const [activeView, setActiveView] = useState<ActiveView>('servers');
   const configEditorRef = useRef<ConfigEditorRef>(null);
-  // New state for commands attempting graceful stop
-  const [stoppingCommandIds, setStoppingCommandIds] = useState<Set<string>>(new Set());
-  // New state for commands that failed automatic cleanup
-  const [cleanupFailedCommandIds, setCleanupFailedCommandIds] = useState<Set<string>>(new Set());
-  // Ref to store timeout IDs for graceful stop
-  const stopTimersRef = useRef<Record<string, number>>({});
+  const forceKillPromptTimerRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     loadConfig();
@@ -48,123 +56,131 @@ function App() {
     // --- Cleanup Timers on Unmount ---
     return () => {
       console.log("App unmounting, clearing stop timers.");
-      Object.values(stopTimersRef.current).forEach(clearTimeout);
+      Object.values(forceKillPromptTimerRef.current).forEach(clearTimeout);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps 
   }, []); // Run only on mount
 
-  // Effect for polling running command statuses
+  // Effect for polling command statuses
   useEffect(() => {
     const intervalId = setInterval(async () => {
-      const runningCommandIds = Object.entries(commandInfo)
-        .filter(([_, info]) => info.is_running)
-        .map(([id, _]) => id);
-      
-      // Also include commands that are in the 'stopping' phase in the poll
-      const idsToPoll = new Set([...runningCommandIds, ...stoppingCommandIds]);
+      // Poll all commands that are potentially active or were recently active
+      // A simple approach is to poll all commands present in the `commandInfo` state keys
+      // Or poll all commands defined in `commands` array
+      const idsToPoll = commands.map(cmd => cmd.id);
+      // More sophisticated: Poll only those not in Idle/Finished/Error state?
+      // Let's keep it simple and poll all configured commands for now.
 
-      if (idsToPoll.size === 0) {
-        return; // No need to poll if nothing is running or stopping
-      }
-      
-      console.log(`Polling status for commands: ${[...idsToPoll].join(', ')}`);
+      if (idsToPoll.length === 0) return;
 
+      // console.log(`Polling status for commands: ${idsToPoll.join(', ')}`);
       const updates: Record<string, CommandInfo> = {};
       let stateChanged = false;
 
       for (const id of idsToPoll) {
         try {
+          // Assume backend should return the full CommandInfo with the status enum
           const latestInfo = await invoke<CommandInfo>("get_command_info", { id });
-          updates[id] = latestInfo;
-
-          // --- Check if a stopping command has finished --- 
-          if (!latestInfo.is_running && stoppingCommandIds.has(id)) {
-            console.log(`Graceful stop for ${id} confirmed by poll. Clearing timer.`);
-            clearTimeout(stopTimersRef.current[id]);
-            delete stopTimersRef.current[id];
-            setStoppingCommandIds(prev => {
-              const newSet = new Set(prev);
-              newSet.delete(id);
-              return newSet;
-            });
-            stateChanged = true; // Ensure state update happens
+          
+          // *** Add Check for valid data structure ***
+          if (!latestInfo || typeof latestInfo !== 'object' || !latestInfo.status || typeof latestInfo.status !== 'object') {
+            console.error(`Polling for ${id} received invalid data structure:`, latestInfo);
+            // Set an Error status or handle appropriately
+            const currentStatusState = commandInfo[id]?.status?.state;
+            // Only update if not already marked as error from invalid data
+            if(currentStatusState !== 'Error' || (commandInfo[id]?.status as any)?.message !== 'Invalid data received from backend poll') {
+                updates[id] = { id, status: { state: 'Error', message: 'Invalid data received from backend poll' } };
+                stateChanged = true;
+            }
+            // Clear any prompt timer if data is invalid
+            if (forceKillPromptTimerRef.current[id]) {
+                 clearTimeout(forceKillPromptTimerRef.current[id]);
+                 delete forceKillPromptTimerRef.current[id];
+             }
+            continue; // Skip processing this invalid entry
           }
-          // --- End stopping command check ---
+          // *** End Check ***
 
-          // Check if the running status actually changed compared to current state
-          if (commandInfo[id]?.is_running !== latestInfo.is_running) {
-              console.log(`Command ${id} status changed: Running=${latestInfo.is_running}, Error=${latestInfo.has_error}`);
-            stateChanged = true;
+          // Now safe to access latestInfo.status
+          const currentStatusState = commandInfo[id]?.status?.state;
+          const latestStatusState = latestInfo.status.state;
+          
+          if (JSON.stringify(commandInfo[id]?.status) !== JSON.stringify(latestInfo.status)) {
+             console.log(`Command ${id} status changed: ${currentStatusState ?? 'Unknown'} -> ${latestStatusState}`);
+             updates[id] = latestInfo;
+             stateChanged = true;
+
+             // --- Handle Force Kill Prompt Timeout --- 
+             const forceKillTimerId = forceKillPromptTimerRef.current[id];
+             if (latestStatusState !== 'Stopping' && forceKillTimerId) {
+                 console.log(`Command ${id} is no longer Stopping. Clearing force kill prompt timer.`);
+                 clearTimeout(forceKillTimerId);
+                 delete forceKillPromptTimerRef.current[id];
+             }
+             // --- End Force Kill Timeout Handling ---
           }
+
         } catch (err) {
           // Handle cases where the command might have been removed or backend error
-          console.error(`Polling failed for command ${id}:`, err);
-          // If polling fails for a command we think is running or stopping, mark it as stopped/error
-          if(commandInfo[id]?.is_running || stoppingCommandIds.has(id)) { 
-             updates[id] = { ...(commandInfo[id] || { id, is_running: false, has_error: false }), is_running: false, has_error: true };
-             stateChanged = true;
-             // Also clean up stopping state if polling fails
-             if (stoppingCommandIds.has(id)) {
-               console.warn(`Polling failed for stopping command ${id}. Clearing timer and stopping state.`);
-               clearTimeout(stopTimersRef.current[id]);
-               delete stopTimersRef.current[id];
-               setStoppingCommandIds(prev => {
-                 const newSet = new Set(prev);
-                 newSet.delete(id);
-                 return newSet;
-               });
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          // If polling fails for a command we *thought* was active, mark as error or remove?
+          // Let's mark it as error for now.
+          if (commandInfo[id] && commandInfo[id]?.status.state !== 'Idle' && commandInfo[id]?.status.state !== 'Finished') {
+              console.error(`Polling failed for potentially active command ${id}:`, err);
+              updates[id] = { id, status: { state: 'Error', message: `Polling failed: ${errorMsg}` } };
+              stateChanged = true;
+               // Clear any prompt timer if polling fails
+              if (forceKillPromptTimerRef.current[id]) {
+                  clearTimeout(forceKillPromptTimerRef.current[id]);
+                  delete forceKillPromptTimerRef.current[id];
+              }
+          } else {
+            // If polling fails for an idle/finished command, maybe ignore or log differently
+            // console.warn(`Polling failed for idle/finished command ${id}: ${errorMsg}`);
+            // Or maybe remove it from commandInfo if not in commands list?
+             if (!commands.some(c => c.id === id) && commandInfo[id]) {
+                console.log(`Removing stale command info for ${id} after poll failure.`);
+                // Need a way to signal removal rather than update
+                // For now, just update to Error state.
+                 updates[id] = { id, status: { state: 'Error', message: `Polling failed: ${errorMsg}` } };
+                 stateChanged = true;
              }
           }
         }
       }
 
-      // Update state only if any relevant command status changed
+      // Update state only if any command status changed
       if (stateChanged) {
-          console.log("Updating commandInfo and commands state due to poll results.");
-        setCommandInfo(prevInfo => ({ // Update commandInfo first
+        setCommandInfo(prevInfo => ({ 
           ...prevInfo,
           ...updates,
         }));
-
-        setCommands(prevCmds => // Then update commands based on fresh info
-          prevCmds.map(cmd => {
-            if (updates[cmd.id]) {
-              return { ...cmd, isRunning: updates[cmd.id].is_running };
-            }
-            return cmd;
-          })
-        );
       }
 
     }, 2000); // Poll every 2 seconds
 
     // Cleanup interval on component unmount
-    return () => clearInterval(intervalId);
+    return () => {
+       clearInterval(intervalId);
+       // Clear any remaining prompt timers on unmount
+       Object.values(forceKillPromptTimerRef.current).forEach(clearTimeout);
+    };
 
-  // Include stoppingCommandIds in dependency array so polling loop restarts if it changes
-  }, [commandInfo, stoppingCommandIds]); 
+  }, [commands, commandInfo]); // Depend on commands and commandInfo
 
-  // --- Add helper to clear cleanup failed state ---
-  const clearCleanupFailedState = (id: string) => {
-    setCleanupFailedCommandIds(prev => {
-      const newSet = new Set(prev);
-      newSet.delete(id);
-      return newSet;
-    });
+  // Helper to check if a command is in a state that prevents user actions
+  const isActionLocked = (status: CommandStatus | undefined): boolean => {
+      if (!status) return false; // If no info, assume not locked
+      return status.state === 'Starting' || status.state === 'Stopping' || status.state === 'Killing';
   };
-  // --- End helper ---
 
   const loadConfig = async () => {
     try {
       setError(null);
-      setCleanupFailedCommandIds(new Set()); // Clear failed state on reload
-      // Reset terminal state on load
-      setActiveTerminalIds([]);
-      setCurrentTerminalTabId(null);
       const config = await invoke<Config>("load_config", { configPath: null });
       const initialInfo: Record<string, CommandInfo> = {};
-      const loadedCommands = Object.entries(config.mcpServers).map(([id, server]) => {
-        initialInfo[id] = { id, is_running: false, has_error: false };
+      const loadedCommands: MCPCommand[] = Object.entries(config.mcpServers).map(([id, server]) => {
+        initialInfo[id] = { id, status: { state: 'Idle' } };
         return {
           id,
           name: id,
@@ -172,16 +188,17 @@ function App() {
           args: (server as MCPServerConfig).args,
           env: (server as MCPServerConfig).env,
           port: (server as MCPServerConfig).port,
-          isRunning: false,
+          isRunning: false, // Initialize according to imported type
         };
       });
       setCommands(loadedCommands);
       setCommandInfo(initialInfo);
-      setStoppingCommandIds(new Set()); // Reset stopping state on load
-      Object.values(stopTimersRef.current).forEach(clearTimeout); // Clear any lingering timers
-      stopTimersRef.current = {};
+      Object.values(forceKillPromptTimerRef.current).forEach(clearTimeout);
+      forceKillPromptTimerRef.current = {};
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+       const errorMsg = err instanceof Error ? err.message : String(err);
+       console.error("Load config failed:", errorMsg);
+       setError(errorMsg);
     }
   };
 
@@ -205,28 +222,32 @@ function App() {
     }
   };
 
-  const handleEditCommand = async (editedCommand: MCPCommand) => {
-    console.log("Editing command:", editedCommand);
-    if (!editingCommand) return;
+  const handleEditCommand = async (editedData: AddMCPCommand & { originalId: string }) => {
+    console.log("Editing command:", editedData.originalId);
+    const currentInfo = commandInfo[editedData.originalId];
+    const currentStatus = currentInfo?.status?.state ?? 'Idle';
+
+    if (currentStatus !== 'Idle' && currentStatus !== 'Finished' && currentStatus !== 'Error') {
+         setError(`Cannot edit server '${editedData.originalId}' while it is ${currentStatus}. Stop it first.`);
+         return;
+    }
 
     try {
       setError(null);
-      // Make sure it's not running or stopping before edit
-      if (commandInfo[editingCommand.id]?.is_running || stoppingCommandIds.has(editingCommand.id)) {
-        setError(`Cannot edit server '${editingCommand.id}' while it is running or stopping.`);
-        return;
-      }
-      await invoke<Config>("remove_server", { name: editingCommand.id });
-      await invoke<Config>("add_server", {
-        name: editedCommand.name, // Use potentially new name from edit form
-        command: editedCommand.command,
-        args: editedCommand.args,
-        env: editedCommand.env,
-        port: editedCommand.port,
-      });
-      await loadConfig();
+      // Remove original using the originalId
+      await invoke<Config>("remove_server", { name: editedData.originalId }); 
+      // Add new server using data from the form (editedData)
+      await invoke<Config>("add_server", { 
+          name: editedData.name, 
+          command: editedData.command,
+          args: editedData.args,
+          env: editedData.env,
+          port: editedData.port,
+          // No need to pass isRunning here
+       });
+      await loadConfig(); // Reload to get fresh state
       setIsAddCommandFormOpen(false);
-      setEditingCommand(null);
+      setEditingCommand(null); // Clear editing state
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error("Edit command failed:", errorMsg);
@@ -247,176 +268,161 @@ function App() {
   };
   // --- End openTerminalTab ---
 
-  const handleToggleCommand = async (cmd: MCPCommand, forceRetry: boolean = false) => {
+  const handleToggleCommand = async (cmd: MCPCommand) => {
     const cmdId = cmd.id;
-    console.log(`Toggling command ${cmdId}... Force Retry: ${forceRetry}`);
-    setError(null); // Clear general error first
-    clearCleanupFailedState(cmdId); // Clear specific cleanup error state for this command
+    const currentInfo = commandInfo[cmdId];
+    const currentStatus = currentInfo?.status ?? { state: 'Idle' };
 
-    // Prevent toggle if already stopping gracefully (unless forcing retry)
-    if (stoppingCommandIds.has(cmdId) && !forceRetry) {
-      console.warn(`Command ${cmdId} is already in the process of stopping gracefully. Ignoring toggle.`);
-      return;
+    console.log(`Toggling command ${cmdId}. Polled status: ${currentStatus.state}`);
+    setError(null);
+
+    try {
+      let targetCommand: string | null = null;
+
+      switch (currentStatus.state) {
+        case 'Idle':
+        case 'Finished':
+        case 'Error':
+          targetCommand = "start_command";
+          break;
+        case 'Running':
+          targetCommand = "stop_command";
+          break;
+        case 'Starting':
+        case 'Stopping': // Maybe allow force kill from here?
+        case 'Killing':
+          console.warn(`Command ${cmdId} is already ${currentStatus.state}. Ignoring toggle.`);
+          return; // Do nothing if in a transition state
+      }
+
+      if (targetCommand) {
+         console.log(`Invoking ${targetCommand} for ${cmdId}`);
+         const backendResponseInfo = await invoke<CommandInfo>(targetCommand, { id: cmdId });
+         console.log(`Backend response for ${targetCommand} on ${cmdId}:`, backendResponseInfo);
+
+         // *** Add Validation for backendResponseInfo structure ***
+         if (!backendResponseInfo || typeof backendResponseInfo !== 'object' || !backendResponseInfo.status || typeof backendResponseInfo.status !== 'object') {
+            console.error(`Invoke ${targetCommand} for ${cmdId} received invalid data structure:`, backendResponseInfo);
+            // Set Error status
+            setCommandInfo(prev => ({ 
+                ...prev, 
+                [cmdId]: { ...(prev[cmdId] ?? { id: cmdId }), status: { state: 'Error', message: `Invalid response from ${targetCommand}` } } 
+            }));
+             // Clear any prompt timer if data is invalid
+            if (forceKillPromptTimerRef.current[cmdId]) {
+                 clearTimeout(forceKillPromptTimerRef.current[cmdId]);
+                 delete forceKillPromptTimerRef.current[cmdId];
+            }
+            return; // Stop further processing for this invalid response
+         }
+         // *** End Validation ***
+
+         // Now safe to process backendResponseInfo
+         setCommandInfo(prev => ({ ...prev, [cmdId]: backendResponseInfo }));
+
+         if (targetCommand === 'start_command' && backendResponseInfo.status.state === 'Running') {
+             openTerminalTab(cmdId);
+         }
+
+         if (targetCommand === 'stop_command') {
+             // Clear any existing timer first
+             if (forceKillPromptTimerRef.current[cmdId]) {
+                 clearTimeout(forceKillPromptTimerRef.current[cmdId]);
+             }
+             console.log(`Starting force kill prompt timer for ${cmdId}`);
+             forceKillPromptTimerRef.current[cmdId] = setTimeout(async () => {
+                // Check FRESH status when timer fires
+                try {
+                    const freshInfo = await invoke<CommandInfo>("get_command_info", { id: cmdId });
+                    if (freshInfo.status.state === 'Stopping') { // Still stopping?
+                        console.log(`Command ${cmdId} still Stopping after timeout. Prompting user.`);
+                        const userConfirmedForceKill = await confirm(
+                           `Process "${cmdId}" is still stopping after ${GRACEFUL_STOP_TIMEOUT / 1000} seconds. Force kill?`,
+                           { title: 'Force Kill Process?', okLabel: 'Force Kill', cancelLabel: 'Cancel' }
+                        );
+                        if (userConfirmedForceKill) {
+                           handleForceKill(cmdId); // Call dedicated force kill handler
+                        }
+                    } else {
+                        console.log(`Command ${cmdId} is no longer Stopping. No prompt needed.`);
+                    }
+                } catch(err) {
+                    console.error(`Error checking status for ${cmdId} during prompt timer: ${err}`);
+                }
+                // Timer finished, remove ref
+                 delete forceKillPromptTimerRef.current[cmdId];
+
+             }, GRACEFUL_STOP_TIMEOUT);
+         }
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error(`Error toggling command ${cmdId}:`, errorMsg);
+      setError(`Toggle failed for ${cmdId}: ${errorMsg}`);
+      // Update local state to Error on failure?
+       setCommandInfo(prev => ({ 
+           ...prev, 
+           [cmdId]: { ...(prev[cmdId] ?? { id: cmdId }), status: { state: 'Error', message: errorMsg } } 
+       }));
+    }
+  };
+
+  // --- Dedicated Force Kill Handler --- 
+  const handleForceKill = async (cmdId: string) => {
+    console.log(`Handling force kill for ${cmdId}`);
+    setError(null);
+     // Clear any pending prompt timer immediately
+    if (forceKillPromptTimerRef.current[cmdId]) {
+        clearTimeout(forceKillPromptTimerRef.current[cmdId]);
+        delete forceKillPromptTimerRef.current[cmdId];
     }
 
     try {
-      const currentBackendInfo = commandInfo[cmdId];
-      const isCurrentlyRunning = currentBackendInfo ? currentBackendInfo.is_running : cmd.isRunning;
+      // Check current status before sending kill
+      const currentStatus = commandInfo[cmdId]?.status?.state;
+       if (currentStatus !== 'Running' && currentStatus !== 'Stopping') {
+          console.warn(`Cannot force kill ${cmdId}, status is ${currentStatus}.`);
+          // Maybe show error? setError(`Cannot force kill ${cmdId}, status is ${currentStatus}.`);
+          return;
+       }
 
-      let backendResponseInfo: CommandInfo;
-      let wasStartAttempt = false;
+      console.log(`Invoking force_kill_command for ${cmdId}`);
+      const backendResponseInfo = await invoke<CommandInfo>("force_kill_command", { id: cmdId });
+      console.log(`Backend response for force_kill on ${cmdId}:`, backendResponseInfo);
 
-      if (!isCurrentlyRunning || forceRetry) { // Attempt start if not running OR if forcing retry
-        console.log(`Attempting to start command ${cmdId} (Force: ${forceRetry})`);
-        wasStartAttempt = true;
-        try {
-          // If forcing retry, call force kill first *without polling*
-          if (forceRetry) {
-            console.log(`Force Retry: Calling force_kill_command for ${cmdId} before starting.`);
-            try {
-              await invoke<CommandInfo>("force_kill_command", { id: cmdId });
-            } catch (forceKillError) {
-               console.warn(`Force kill before retry failed for ${cmdId}: ${forceKillError}. Proceeding with start attempt anyway.`);
-            }
-             // Optional short delay after force kill during force retry
-             await new Promise(resolve => setTimeout(resolve, 250)); 
-          }
-
-          backendResponseInfo = await invoke<CommandInfo>("start_command", { id: cmdId });
-          console.log(`Start command ${cmdId} backend response:`, backendResponseInfo);
-
-        } catch (error: unknown) {
-          const startError = error instanceof Error ? error.message : String(error);
-
-          // Handle "already running" specifically for non-force retries
-          if (startError.includes("already running according to backend state") && !forceRetry) {
-            console.log(`Got "already running" error for ${cmdId}, attempting force cleanup and poll...`);
-            try {
-              // 1. Try force kill first
-              await invoke<CommandInfo>("force_kill_command", { id: cmdId });
-              console.log(`Force kill sent for ${cmdId}.`);
-
-              // 2. Poll for backend confirmation that it stopped
-              let attempts = 0;
-              const maxAttempts = 10; // Poll for max 5 seconds (10 * 500ms)
-              let isConfirmedStopped = false;
-              while (attempts < maxAttempts) {
-                attempts++;
-                console.log(`Polling status attempt ${attempts} for ${cmdId}...`);
-                try {
-                  const currentInfo = await invoke<CommandInfo>("get_command_info", { id: cmdId });
-                  if (!currentInfo.is_running) {
-                    console.log(`Backend confirmed ${cmdId} is stopped.`);
-                    isConfirmedStopped = true;
-                    break; // Exit poll loop
-                  }
-                } catch (pollError) {
-                  console.warn(`Polling ${cmdId} failed (${pollError}), assuming stopped.`);
-                  isConfirmedStopped = true;
-                  break;
-                }
-                await new Promise(resolve => setTimeout(resolve, 500));
-              }
-
-              if (!isConfirmedStopped) {
-                // *** SET SPECIFIC CLEANUP FAILED STATE INSTEAD OF THROWING ***
-                console.error(`Backend did not confirm ${cmdId} stopped after ${maxAttempts} attempts.`);
-                setError(`Failed to start '${cmdId}'. The previous instance could not be stopped automatically.`); // Set general user-friendly error
-                setCleanupFailedCommandIds(prev => new Set(prev).add(cmdId)); // Set specific command state
-                return; // Stop execution for this command toggle
-              }
-
-              // 3. Retry start
-              console.log(`Retrying start command for ${cmdId}...`);
-              backendResponseInfo = await invoke<CommandInfo>("start_command", { id: cmdId });
-              console.log(`Successfully restarted ${cmdId} after force cleanup and polling.`);
-
-            } catch (cleanupOrRetryError) {
-              // If cleanup/polling/retry itself fails, set general error
-              const errorMsg = cleanupOrRetryError instanceof Error ? cleanupOrRetryError.message : String(cleanupOrRetryError);
-              setError(`Failed during cleanup/retry for ${cmdId}: ${errorMsg}`);
-               // Also set specific state if the final retry fails similarly
-              if (errorMsg.includes("already running according to backend state")) {
-                  setCleanupFailedCommandIds(prev => new Set(prev).add(cmdId));
-              }
-              return; // Stop execution
-            }
-          } else {
-            // Re-throw or handle other start errors (including errors during forceRetry)
-             setError(`Failed to start ${cmdId}: ${startError}`);
-             if (startError.includes("already running according to backend state")) {
-                 setCleanupFailedCommandIds(prev => new Set(prev).add(cmdId));
-             }
-             return; // Stop execution
-          }
-        }
-      } else { // Handle Stop case (no changes needed here for now)
-         // ... existing stop logic ...
-         console.log(`Attempting graceful stop for command ${cmdId}`);
-         setStoppingCommandIds(prev => new Set(prev).add(cmdId));
-         
-         backendResponseInfo = await invoke<CommandInfo>("stop_command", { id: cmdId });
-         console.log(`Graceful stop command ${cmdId} backend response:`, backendResponseInfo);
- 
-         // ... rest of stop logic with timeout ...
+      // *** Add Validation for backendResponseInfo structure ***
+      if (!backendResponseInfo || typeof backendResponseInfo !== 'object' || !backendResponseInfo.status || typeof backendResponseInfo.status !== 'object') {
+        console.error(`Invoke force_kill_command for ${cmdId} received invalid data structure:`, backendResponseInfo);
+        setCommandInfo(prev => ({ 
+            ...prev, 
+            [cmdId]: { ...(prev[cmdId] ?? { id: cmdId }), status: { state: 'Error', message: 'Invalid response from force_kill' } } 
+        }));
+        return; 
       }
+      // *** End Validation ***
 
-      // --- Update state based on backendResponseInfo (if successful) ---
-      // Ensure we have a valid response before updating state
-      if (backendResponseInfo) { 
-          setCommandInfo(prev => ({ 
-              ...prev, 
-              [cmdId]: backendResponseInfo 
-          }));
-          // Only update the main command list's isRunning if it was a start attempt
-          if (wasStartAttempt) {
-            setCommands(prevCmds => prevCmds.map(c => 
-                c.id === cmdId ? { ...c, isRunning: backendResponseInfo.is_running } : c
-            ));
-            // Clear failed state on successful start
-            if (backendResponseInfo.is_running) {
-               clearCleanupFailedState(cmdId);
-            }
-          }
-    
-          // --- Auto-open terminal tab logic ---
-          if (wasStartAttempt && backendResponseInfo.is_running) {
-            console.log(`Command ${cmdId} started, opening terminal tab.`);
-            openTerminalTab(cmdId);
-          }
-      } // End if (backendResponseInfo)
-      // --- End Update state ---
-
-    } catch (err) { // General catch block for unexpected errors in toggle logic
+      // Update state immediately
+      setCommandInfo(prev => ({ ...prev, [cmdId]: backendResponseInfo }));
+    } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      console.error(`General error in toggle command ${cmdId}:`, errorMsg);
-      setError(errorMsg);
-      // Ensure stopping state is cleared if an error occurred during stop attempt
-      if (stoppingCommandIds.has(cmdId)) {
-         console.warn(`Toggle failed for stopping ${cmdId}, clearing timer and stopping state.`);
-         clearTimeout(stopTimersRef.current[cmdId]);
-         delete stopTimersRef.current[cmdId];
-         setStoppingCommandIds(prev => {
-           const newSet = new Set(prev);
-           newSet.delete(cmdId);
-           return newSet;
-         });
-      }
-       // Also ensure cleanup failed state is reset if a general error happens?
-       // Or maybe not, depends if the general error could be related to the failed state.
-       // Let's leave it for now, it gets cleared on next toggle attempt.
+      console.error(`Error force killing command ${cmdId}:`, errorMsg);
+      setError(`Force kill failed for ${cmdId}: ${errorMsg}`);
+       setCommandInfo(prev => ({ 
+           ...prev, 
+           [cmdId]: { ...(prev[cmdId] ?? { id: cmdId }), status: { state: 'Error', message: `Force kill failed: ${errorMsg}` } } 
+       }));
     }
   };
 
   const handleRemoveCommand = async (idToRemove: string) => {
-    console.log("Attempting to remove command:", idToRemove);
-    // Prevent removal if running OR in the process of stopping
-    if (commandInfo[idToRemove]?.is_running || stoppingCommandIds.has(idToRemove)) {
-      setError(`Cannot remove server '${idToRemove}' while it is running or stopping.`);
-      setOpenMenuId(null); // Close menu
-      return;
+    const currentInfo = commandInfo[idToRemove];
+    const currentStatus = currentInfo?.status?.state ?? 'Idle';
+    
+    if (currentStatus !== 'Idle' && currentStatus !== 'Finished' && currentStatus !== 'Error') {
+         setError(`Cannot remove server '${idToRemove}' while it is ${currentStatus}. Stop it first.`);
+         setOpenMenuId(null);
+         return;
     }
-
     // --- Confirmation Dialog --- 
     const userConfirmed = await confirm(
       `Are you sure you want to remove the server "${idToRemove}"? This action cannot be undone.`,
@@ -434,11 +440,24 @@ function App() {
     try {
       setError(null);
       await invoke<Config>("remove_server", { name: idToRemove });
-      await loadConfig(); // Reload config to reflect removal
-      // --- Close terminal tab if it was open for the removed command ---
-      handleCloseTab(idToRemove, true); // Pass true to indicate removal
-      // --- End close terminal tab ---
-      setOpenMenuId(null); // Ensure menu is closed after action
+      // --- State updates after successful removal --- 
+      // 1. Remove from commands list
+      setCommands(prev => prev.filter(cmd => cmd.id !== idToRemove));
+      // 2. Remove from commandInfo state
+      setCommandInfo(prev => {
+          const newState = { ...prev };
+          delete newState[idToRemove];
+          return newState;
+      });
+      // 3. Close terminal tab
+      handleCloseTab(idToRemove, true); 
+      // 4. Clear any prompt timer
+       if (forceKillPromptTimerRef.current[idToRemove]) {
+           clearTimeout(forceKillPromptTimerRef.current[idToRemove]);
+           delete forceKillPromptTimerRef.current[idToRemove];
+       }
+      // --- End state updates ---
+      setOpenMenuId(null);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error("Remove command failed:", errorMsg);
@@ -461,15 +480,14 @@ function App() {
     }
   };
 
-  const handleFormSubmit = (formData: AddMCPCommand | MCPCommand) => {
+  const handleFormSubmit = (formData: AddMCPCommand) => {
     if (editingCommand) {
       handleEditCommand({ 
         ...formData,
-        id: editingCommand.id,
-        isRunning: editingCommand.isRunning
+        originalId: editingCommand.id,
        });
     } else {
-      handleAddCommand(formData as AddMCPCommand);
+      handleAddCommand(formData);
     }
   };
 
@@ -505,43 +523,23 @@ function App() {
     setCurrentTerminalTabId(id);
   }, []);
 
+  // isBeingRemoved flag is less critical now, backend state dictates actions.
+  // Closing a tab doesn't need to force-clear backend-driven states.
   const handleCloseTab = useCallback((idToClose: string, isBeingRemoved: boolean = false) => {
     setActiveTerminalIds(prevIds => {
       const newIds = prevIds.filter(id => id !== idToClose);
-      
-      // If the closed tab was the current one, select another tab
       if (currentTerminalTabId === idToClose) {
-        if (newIds.length > 0) {
-          // Select the last tab in the new list
-          setCurrentTerminalTabId(newIds[newIds.length - 1]); 
-        } else {
-          setCurrentTerminalTabId(null); // No tabs left
-        }
-      } // else: closing an inactive tab, currentTabId remains the same
-
-      // If the command is NOT being removed entirely, 
-      // ensure we clear stopping/cleanup states if the user manually closes the tab
-      // during these states.
-      if (!isBeingRemoved) {
-         if (stoppingCommandIds.has(idToClose)) {
-            console.warn(`Closed terminal tab for stopping command ${idToClose}, clearing stop state.`);
-            clearTimeout(stopTimersRef.current[idToClose]);
-            delete stopTimersRef.current[idToClose];
-            setStoppingCommandIds(prev => {
-              const newSet = new Set(prev);
-              newSet.delete(idToClose);
-              return newSet;
-            });
-         }
-         if (cleanupFailedCommandIds.has(idToClose)) {
-             console.warn(`Closed terminal tab for cleanup-failed command ${idToClose}, clearing failed state.`);
-             clearCleanupFailedState(idToClose);
-         }
+        setCurrentTerminalTabId(newIds.length > 0 ? newIds[newIds.length - 1] : null);
       }
-      
+      // Clear prompt timer if tab is closed manually
+      if (!isBeingRemoved && forceKillPromptTimerRef.current[idToClose]){
+          console.warn(`Closed terminal tab for ${idToClose} during stop timeout, clearing prompt timer.`);
+          clearTimeout(forceKillPromptTimerRef.current[idToClose]);
+          delete forceKillPromptTimerRef.current[idToClose];
+      }
       return newIds;
     });
-  }, [currentTerminalTabId, stoppingCommandIds, cleanupFailedCommandIds]); // Include dependencies
+  }, [currentTerminalTabId]); // Removed stopping/cleanup states from deps
   // --- End Terminal Tab Handlers ---
 
   return (
@@ -622,151 +620,162 @@ function App() {
                   <h3>Running Servers</h3>
                   {/* Use commandInfo length for running count for better accuracy */}
                   <div className="stat-value">
-                     {Object.values(commandInfo).filter(info => info.is_running).length}
+                     {Object.values(commandInfo).filter(info => info.status.state === 'Running').length}
                   </div>
                 </div>
               </div>
 
               {/* Command list specific to Servers view */}
               <div className="commands-list">
-                {commands.map((cmd) => {
-                  const currentInfo = commandInfo[cmd.id] || { id: cmd.id, is_running: false, has_error: false };
-                  const isRunning = currentInfo.is_running;
-                  const hasError = currentInfo.has_error;
-                  const isStopping = stoppingCommandIds.has(cmd.id);
-                  const isCleanupFailed = cleanupFailedCommandIds.has(cmd.id);
-                  const isMenuDisabled = isRunning || isStopping; // Keep menu disabled if running/stopping
+                {commands.map((cmd: MCPCommand) => {
+                  const currentInfo = commandInfo[cmd.id];
+                  const status = currentInfo?.status ?? { state: 'Idle' };
+                  const hasError = status.state === 'Error' || (status.state === 'Finished' && !status.success);
+                  const isLocked = isActionLocked(status);
+
+                  let buttonContent: React.ReactNode = null;
+                  let buttonAction = () => handleToggleCommand(cmd);
+                  let buttonClassName = "action-button";
+                  let isButtonDisabled = false;
+                  let showForceKillButton = false;
+
+                  if (!currentInfo) {
+                      // Before first poll: Use cmd.isRunning as a basic hint
+                      if (cmd.isRunning) {
+                          buttonContent = <><VscDebugStop className="button-icon" /> Stop</>;
+                          buttonClassName += " stop";
+                      } else {
+                          buttonContent = <><VscDebugStart className="button-icon" /> Start</>;
+                          buttonClassName += " start";
+                      }
+                      // Button is enabled before first poll
+                  } else {
+                      // After first poll: Use detailed status
+                      switch (status.state) {
+                         case 'Idle':
+                         case 'Finished':
+                         case 'Error':
+                           buttonContent = <><VscDebugStart className="button-icon" /> Start</>;
+                           buttonClassName += " start";
+                           break;
+                         case 'Running':
+                           buttonContent = <><VscDebugStop className="button-icon" /> Stop</>;
+                           buttonClassName += " stop";
+                           break;
+                         case 'Starting':
+                           buttonContent = <>Starting...</>; 
+                           isButtonDisabled = true;
+                           break;
+                         case 'Stopping':
+                           buttonContent = <>Stopping...</>; 
+                           isButtonDisabled = true;
+                           showForceKillButton = true;
+                           break;
+                         case 'Killing':
+                           buttonContent = <>Killing...</>; 
+                           isButtonDisabled = true;
+                           break;
+                      }
+                  }
                   
                   return (
-                    <div key={cmd.id} className={`command-item ${hasError && !isRunning && !isCleanupFailed ? 'error-state' : ''} ${isStopping ? 'stopping-state' : ''} ${isCleanupFailed ? 'cleanup-failed-state' : ''}`}>
-                      <div className="command-header">
-                        <div className="command-name">
-                          {/* Status indicator reflects backend state (is_running), use stopping-state class for visual cue */}
-                          <span className={`status-indicator ${isRunning ? 'running' : ''} ${hasError ? 'error' : ''}`} />
-                          {cmd.name}
-                        </div>
-                        <div className="menu-container">
-                          <button 
+                    <div key={cmd.id} className={`command-item ${hasError ? 'error-state' : ''} ${isLocked ? 'locked-state' : ''}`}>
+                       <div className="command-header">
+                         <div className="command-name">
+                           <span className={`status-indicator state-${status.state.toLowerCase()} ${hasError ? 'error' : ''}`} />
+                           {cmd.name}
+                         </div>
+                         <div className="menu-container">
+                           <button 
                             className="menu-button"
                             onClick={(e) => {
                               e.stopPropagation();
                               setOpenMenuId(openMenuId === cmd.id ? null : cmd.id);
                             }}
-                            disabled={isMenuDisabled} // Disable menu if running or stopping
-                          >
-                            <div className="menu-dots">⋮</div>
-                          </button>
-                          {openMenuId === cmd.id && (
+                            disabled={isLocked}
+                           >
+                             <div className="menu-dots">⋮</div>
+                           </button>
+                           {openMenuId === cmd.id && (
                             <div className="dropdown-menu">
-                              <button 
-                                onClick={() => {
-                                  setEditingCommand(cmd);
-                                  setIsAddCommandFormOpen(true);
-                                  setOpenMenuId(null);
-                                }}
-                                disabled={isMenuDisabled} // Disable edit
-                              >
-                                <VscEdit className="menu-icon" />
-                                Edit
-                              </button>
-                              <button 
-                                className="delete"
-                                onClick={() => handleRemoveCommand(cmd.id)}
-                                disabled={isMenuDisabled} // Disable remove
-                              >
-                                <VscTrash className="menu-icon" />
-                                Remove
-                              </button>
+                              <button onClick={() => {
+                                setEditingCommand(cmd);
+                                setIsAddCommandFormOpen(true);
+                                setOpenMenuId(null);
+                              }} disabled={isLocked}> <VscEdit/> Edit </button>
+                              <button onClick={() => handleRemoveCommand(cmd.id)} disabled={isLocked} className="delete"> <VscTrash/> Remove </button>
+                            </div>
+                           )}
+                         </div>
+                       </div>
+                       {status.state === 'Error' && (
+                           <div className="error-message command-error">Error: {status.message}</div>
+                       )}
+                       {status.state === 'Finished' && (
+                           <div className="info-row exit-code">
+                              <span className="info-label">Exit Code</span>
+                              <span className={`info-value ${status.success ? 'success' : 'error'}`}>{status.code ?? 'N/A'} ({status.success ? 'Success' : 'Failed'})</span>
+                           </div>
+                       )}
+                       <div className="command-info">
+                         <div className="info-row">
+                            <span className="info-label">Command</span>
+                            <span className="info-value">{cmd.command} {cmd.args.join(' ')}</span>
+                          </div>
+                          {cmd.port && (
+                            <div className="info-row">
+                              <span className="info-label">Configured Port</span>
+                              <span className="info-value">{cmd.port}</span>
                             </div>
                           )}
-                        </div>
-                      </div>
-                      <div className="command-info">
-                        <div className="info-row">
-                          <span className="info-label">Command</span>
-                          <span className="info-value">{cmd.command} {cmd.args.join(' ')}</span>
-                        </div>
-                        {cmd.port && (
-                          <div className="info-row tooltip-container">
-                            <span className="info-label">Port</span>
-                            <span className="info-value">
-                              {cmd.port}
-                              <VscInfo className="info-icon tooltip-trigger" />
-                            </span>
-                            <span className="tooltip-text">
-                              For reference only. Does not affect executed command.
-                            </span>
-                          </div>
-                        )}
-                        {Object.entries(cmd.env || {}).length > 0 && (
-                          <div className="info-row">
-                            <span className="info-label">Environment</span>
-                            <div className="info-value">
-                              {Object.entries(cmd.env || {}).map(([key, value]) => (
-                                <div key={key}>
-                                  {key}={value}
-                                </div>
-                              ))}
+                          {currentInfo?.process_id && status.state === 'Running' && (
+                            <div className="info-row">
+                              <span className="info-label">Process ID</span>
+                              <span className="info-value">{currentInfo.process_id}</span>
                             </div>
-                          </div>
-                        )}
-                      </div>
-                      <div className="command-actions">
-                        {/* --- Specific Action Button Area --- */}
-                        {isCleanupFailed ? (
-                          // --- Cleanup Failed State --- 
-                          <div className="cleanup-failed-actions">
-                            <button 
-                              className="action-button retry-button" // Style as needed
-                              onClick={() => handleToggleCommand(cmd, true)} // Pass forceRetry = true
-                            >
-                              {/* Consider adding a specific icon VscSync ? */}
-                              Force Stop & Retry Start
-                            </button>
-                             <p className="cleanup-failed-guidance">
-                               If retry fails, check Activity Monitor/Task Manager for '{cmd.name}' or restart MCP Runner.
-                             </p>
-                          </div>
-                        ) : (
-                          // --- Normal State --- 
-                          <>
-                            <button 
-                              className={`action-button ${isRunning ? (isStopping ? 'stopping' : 'stop') : 'start'}`}
-                              onClick={() => handleToggleCommand(cmd)} // Normal toggle
-                              disabled={isStopping} // Disable toggle button while stopping
-                            >
-                              {/* Restore button content based on state */}
-                              {isStopping ? (
-                                <>
-                                  {/* Optional: Add a spinner icon here later? */}
-                                  <VscDebugStop className="button-icon" />
-                                  Stopping...
-                                </>
-                              ) : isRunning ? (
-                                <>
-                                  <VscDebugStop className="button-icon" />
-                                  Stop
-                                </>
-                              ) : (
-                                <>
-                                  <VscDebugStart className="button-icon" />
-                                  Start
-                                </>
-                              )}
-                            </button>
-                            {(isRunning || isStopping) && ( // Show terminal button if running OR stopping
-                              <button 
-                                className="action-button secondary"
-                                onClick={() => openTerminalTab(cmd.id)} // Use openTerminalTab
-                                disabled={false} // Still never disable
+                          )}
+                          {currentInfo?.port && status.state === 'Running' && (
+                            <div className="info-row">
+                              <span className="info-label">Active Port</span>
+                              <span className="info-value">{currentInfo.port}</span>
+                            </div>
+                          )}
+                          {Object.entries(cmd.env || {}).length > 0 && (
+                            <div className="info-row">
+                              <span className="info-label">Env</span>
+                              <span className="info-value">{Object.entries(cmd.env || {}).map(([k, v]) => `${k}=${v}`).join(', ')}</span>
+                            </div>
+                          )}
+                       </div>
+                       <div className="command-actions">
+                          {buttonContent && (
+                             <button 
+                               className={buttonClassName}
+                               onClick={buttonAction}
+                               disabled={isButtonDisabled}
+                             >
+                               {buttonContent}
+                             </button>
+                          )}
+                          {showForceKillButton && (
+                             <button 
+                                className="action-button stop force-kill"
+                                onClick={() => handleForceKill(cmd.id)}
+                                title="Force Kill Process"
                               >
-                                <VscTerminal className="button-icon" />
-                                Terminal
+                                 <VscStopCircle className="button-icon" /> 
+                                 Force Kill
                               </button>
-                            )}
-                          </>
-                        )}
-                        {/* --- End Specific Action Button Area --- */}
+                          )}
+                          {(status.state === 'Running' || status.state === 'Starting' || status.state === 'Stopping' || status.state === 'Killing') && ( 
+                            <button 
+                              className="action-button secondary"
+                              onClick={() => openTerminalTab(cmd.id)}
+                            >
+                              <VscTerminal className="button-icon" />
+                              Terminal
+                            </button>
+                          )}
                       </div>
                     </div>
                   );

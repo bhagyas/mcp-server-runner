@@ -1,8 +1,5 @@
 import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { open } from '@tauri-apps/plugin-dialog';
-import { join } from '@tauri-apps/api/path';
-
 
 interface SettingsProps {
   isVisible: boolean;
@@ -11,7 +8,6 @@ interface SettingsProps {
 declare global {
   interface Window {
     __TAURI__: {
-      invoke: <T>(cmd: string, args?: any) => Promise<T>;
       dialog: {
         open: (options: {
           directory?: boolean;

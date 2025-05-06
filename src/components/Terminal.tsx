@@ -10,6 +10,8 @@ interface CommandInfo {
   id: string;
   is_running: boolean;
   has_error: boolean;
+  process_id?: number;
+  port?: number;
 }
 
 export function Terminal({ commandId, isVisible }: TerminalProps) {
@@ -119,6 +121,12 @@ export function Terminal({ commandId, isVisible }: TerminalProps) {
             Terminal - {commandId}
             {commandInfo && (
               <span className={`status-indicator ${commandInfo.is_running ? 'running' : ''} ${commandInfo.has_error ? 'error' : ''}`} />
+            )}
+            {commandInfo?.process_id && (
+              <span className="terminal-meta">PID: {commandInfo.process_id}</span>
+            )}
+            {commandInfo?.port && (
+              <span className="terminal-meta">Port: {commandInfo.port}</span>
             )}
           </h3>
         </div>
