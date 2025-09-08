@@ -17,6 +17,8 @@ use tauri::{
     tray::TrayIconBuilder,
     Manager, Runtime, State,
 };
+use reqwest::header::{HeaderMap, AUTHORIZATION};
+use serde_json::Value;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct MCPServerConfig {
@@ -637,6 +639,67 @@ async fn remove_server<R: Runtime>(
     Ok(config.clone())
 }
 
+#[tauri::command]
+async fn fetch_smithery_servers(api_key: String, search_term: Option<String>) -> Result<Value, String> {
+    let base_url = "https://registry.smithery.ai/servers";
+    let mut query_params = vec![("q".to_string(), "is:deployed".to_string())];
+    query_params.push(("pageSize".to_string(), "20".to_string())); // Fetch more items if searching
+
+    if let Some(term) = search_term {
+        if !term.trim().is_empty() {
+            // Append the search term to the existing "is:deployed" query
+            query_params[0].1 = format!("{} {}", query_params[0].1, term.trim());
+        }
+    }
+
+    let mut url = reqwest::Url::parse(base_url).map_err(|e| e.to_string())?;
+    url.query_pairs_mut().extend_pairs(query_params.iter().map(|(k,v)| (k.as_str(), v.as_str())));
+
+    let mut headers = HeaderMap::new();
+    headers.insert(AUTHORIZATION, format!("Bearer {}", api_key).parse().unwrap());
+
+    let client = reqwest::Client::new();
+    let res = client
+        .get(url)
+        .headers(headers)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let status = res.status();
+    let text = res.text().await.map_err(|e| e.to_string())?;
+
+    if !status.is_success() {
+        return Err(format!("HTTP {}: {}", status, text));
+    }
+
+    serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn fetch_smithery_server_details(api_key: String, qualified_name: String) -> Result<Value, String> {
+    let url = format!("https://registry.smithery.ai/servers/{}", qualified_name);
+    let mut headers = HeaderMap::new();
+    headers.insert(AUTHORIZATION, format!("Bearer {}", api_key).parse().unwrap());
+
+    let client = reqwest::Client::new();
+    let res = client
+        .get(&url)
+        .headers(headers)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let status = res.status();
+    let text = res.text().await.map_err(|e| e.to_string())?;
+
+    if !status.is_success() {
+        return Err(format!("HTTP {}: {}", status, text));
+    }
+
+    serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -655,6 +718,8 @@ pub fn run() {
             get_command_info,
             get_command_output,
             remove_server,
+            fetch_smithery_servers,
+            fetch_smithery_server_details,
         ])
         .setup(|app| {
             // Create menu items

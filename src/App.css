@@ -214,6 +214,7 @@ body {
   font-weight: 600;
   font-size: 1.1rem;
   color: var(--text-primary);
+  flex-wrap: wrap;
 }
 
 .status-indicator {
@@ -1053,7 +1054,7 @@ button {
 }
 
 .modal-content {
-  background: var(--background);
+  background: var(--background-secondary);
   padding: 2rem;
   border-radius: 8px;
   width: 90%;
@@ -1586,3 +1587,242 @@ button {
    min-height: 0; 
 }
 */
+
+/* Table View Styles - Improved */
+.table-view-container {
+  width: 100%;
+  overflow-x: auto;
+  background: var(--background-secondary);
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+  border: 1px solid var(--border-color);
+  margin-bottom: 1.5rem;
+  padding: 0.5rem 0.5rem 0 0.5rem;
+}
+
+.commands-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.98rem;
+  background: transparent;
+  min-width: 700px;
+}
+
+.commands-table th, .commands-table td {
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: middle;
+  position: relative;
+}
+
+.commands-table th {
+  background: var(--background-secondary);
+  color: var(--text-secondary);
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.92rem;
+  letter-spacing: 0.5px;
+  border-bottom: 2px solid var(--border-color);
+}
+
+.commands-table tr {
+  transition: background 0.18s;
+}
+
+.commands-table tbody tr:nth-child(even) {
+  background: rgba(255,255,255,0.02);
+}
+
+.commands-table tbody tr:hover {
+  background: rgba(47,129,247,0.07);
+}
+
+.commands-table tr.error-state {
+  background: rgba(248, 81, 73, 0.10) !important;
+}
+
+.commands-table tr.locked-state {
+  opacity: 0.6;
+}
+
+.commands-table td {
+  font-size: 0.98rem;
+  color: var(--text-primary);
+  max-width: 260px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
+.commands-table td .status-indicator {
+  margin-right: 0.5rem;
+  vertical-align: middle;
+}
+
+.commands-table td .dropdown-menu {
+  left: auto;
+  right: 0;
+  min-width: 120px;
+  margin-top: 0.2rem;
+}
+
+.commands-table .action-button.table-action,
+.commands-table .action-button.secondary,
+.commands-table .action-button.force-kill {
+  vertical-align: middle;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.commands-table .dropdown-action-btn {
+  height: 28px;
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
+  margin: 0 0.1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.3rem;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  vertical-align: middle;
+  border-radius: 6px;
+  transition: background 0.18s, color 0.18s;
+}
+.commands-table .dropdown-action-btn:hover:not(:disabled) {
+  background: rgba(47,129,247,0.07);
+  color: var(--accent-color);
+}
+.commands-table .dropdown-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.commands-table td:last-child {
+  min-width: 220px;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .table-view-container {
+    min-width: 0;
+    padding: 0.25rem;
+  }
+  .commands-table {
+    min-width: 0;
+    font-size: 0.95rem;
+  }
+  .commands-table th, .commands-table td {
+    padding: 0.4rem 0.4rem;
+    font-size: 0.95rem;
+  }
+  .commands-table td {
+    max-width: 120px;
+  }
+  .commands-table td:last-child {
+    min-width: 120px;
+  }
+}
+
+/* Make dropdown menu not overflow on small screens */
+@media (max-width: 600px) {
+  .commands-table td .dropdown-menu {
+    right: auto;
+    left: 0;
+    min-width: 100px;
+  }
+}
+
+/* Table view toggle buttons */
+.view-toggle {
+  margin-bottom: 1.2rem;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.view-toggle .secondary-button.active {
+  background: var(--accent-color);
+  color: #fff;
+  border-color: var(--accent-color);
+  box-shadow: 0 2px 8px rgba(47,129,247,0.08);
+}
+.view-toggle .secondary-button {
+  min-width: 60px;
+  font-size: 0.97rem;
+  padding: 0.3rem 0.8rem;
+  border-radius: 6px;
+  border: 1.5px solid var(--border-color);
+  background: var(--background-primary);
+  color: var(--text-primary);
+  transition: background 0.18s, color 0.18s;
+}
+.view-toggle .secondary-button:not(.active):hover {
+  background: rgba(47,129,247,0.07);
+  color: var(--accent-color);
+}
+
+/* Add spacing between action buttons in the table view */
+.commands-table td {
+  /* ...existing styles... */
+}
+.commands-table .table-actions-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* Server Type Tags for Discover View */
+.server-type-tags-container {
+  display: inline-flex;
+  gap: 0.4rem; /* Adjust spacing between tags */
+  margin-left: 0.75rem; /* Adjust spacing from server name */
+  align-items: center; /* Vertically align tags if names wrap */
+}
+
+.server-type-tag {
+  display: inline-block;
+  background-color: #e0e0e0; /* Default background */
+  color: #333333;           /* Default text color */
+  border-radius: 4px;
+  padding: 0.15rem 0.5rem; /* Vertical and horizontal padding */
+  font-size: 0.75em;      /* Smaller font size for tags */
+  font-weight: 500;
+  text-transform: uppercase;
+  line-height: 1.2;      /* Adjust line height for better vertical centering if needed */
+  white-space: nowrap;   /* Prevent tags from wrapping */
+}
+
+/* Specific styles for different types */
+.server-type-tag.type-stdio {
+  background-color: var(--accent-color); /* Blue for stdio */
+  color: white;
+}
+
+.server-type-tag.type-http, 
+.server-type-tag.type-https {
+  background-color: #4caf50; /* Green for http/https */
+  color: white;
+}
+
+.server-type-tag.type-ws,
+.server-type-tag.type-wss {
+  background-color: #ff9800; /* Orange for websockets */
+  color: white;
+}
+
+.server-type-tag.type-remote { /* Example for a generic 'remote' if used */
+  background-color: #795548; /* Brown for remote */
+  color: white;
+}
+
+/* Ensure the command name area can accommodate tags without breaking layout */
+.command-name {
+  /* ... existing styles ... */
+  flex-wrap: wrap; /* Allow tags to wrap if server name is very long */
+}

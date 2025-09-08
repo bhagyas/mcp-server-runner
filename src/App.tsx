@@ -6,8 +6,10 @@ import { AddMCPCommand as AddMCPCommandForm } from "./components/AddMCPCommand";
 import { TabbedTerminalContainer } from "./components/TabbedTerminalContainer";
 import { ConfigEditor, ConfigEditorRef } from "./components/ConfigEditor";
 import { Settings } from "./components/Settings";
-import { VscServer, VscSettingsGear, VscAdd, VscJson, VscTerminal, VscTrash, VscEdit, VscDebugStart, VscDebugStop, VscSave, VscStopCircle } from "react-icons/vsc";
+import { VscServer, VscSettingsGear, VscAdd, VscJson, VscTerminal, VscTrash, VscEdit, VscDebugStart, VscDebugStop, VscSave, VscStopCircle, VscListFlat, VscLayout } from "react-icons/vsc";
 import "./App.css";
+import { DiscoverServers } from "./components/DiscoverServers";
+import { TableView } from "./components/TableView";
 
 // Define the richer CommandStatus enum (mirroring hypothetical backend)
 // This still assumes the backend sends this structure via get_command_info
@@ -28,7 +30,7 @@ interface CommandInfo {
   port?: number;
 }
 
-type ActiveView = 'servers' | 'settings' | 'config';
+type ActiveView = 'servers' | 'settings' | 'config' | 'discover';
 
 // Approx height of the terminal based on CSS (40vh)
 // A more robust solution would measure the actual element or pass height up
@@ -36,6 +38,8 @@ const TERMINAL_APPROX_HEIGHT = '40vh';
 
 // Timeout for graceful stop before prompting for force kill (in milliseconds)
 const GRACEFUL_STOP_TIMEOUT = 5000; 
+
+type ServerViewMode = 'card' | 'table';
 
 function App() {
   const [commands, setCommands] = useState<MCPCommand[]>([]);
@@ -49,9 +53,16 @@ function App() {
   const [activeView, setActiveView] = useState<ActiveView>('servers');
   const configEditorRef = useRef<ConfigEditorRef>(null);
   const forceKillPromptTimerRef = useRef<Record<string, number>>({});
+  const [serverViewMode, setServerViewMode] = useState<ServerViewMode>(() => {
+    if (typeof window !== 'undefined') {
+      return (localStorage.getItem('serverViewMode') as ServerViewMode) || 'card';
+    }
+    return 'card';
+  });
 
   useEffect(() => {
     loadConfig();
+    localStorage.setItem('serverViewMode', serverViewMode);
 
     // --- Cleanup Timers on Unmount ---
     return () => {
@@ -505,6 +516,9 @@ function App() {
   } else if (activeView === 'settings') {
     headerTitle = "Settings";
     headerSubtitle = "Configure application settings";
+  } else if (activeView === 'discover') {
+    headerTitle = "Discover MCP Servers";
+    headerSubtitle = "Browse and add popular MCP servers from Smithery";
   }
 
   const triggerConfigSave = async () => {
@@ -555,6 +569,13 @@ function App() {
             Servers
           </div>
           <div 
+            className={`nav-item ${activeView === 'discover' ? 'active' : ''}`}
+            onClick={() => setActiveView('discover')}
+          >
+            <VscAdd className="nav-icon" />
+            Discover
+          </div>
+          <div 
             className={`nav-item ${activeView === 'config' ? 'active' : ''}`}
             onClick={() => setActiveView('config')}
           >
@@ -583,19 +604,39 @@ function App() {
             <h1>{headerTitle}</h1>
             <p className="subtitle">{headerSubtitle}</p>
           </div>
-          <div className="header-actions">
+          <div className="header-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             {activeView === 'servers' && (
-               <button className="primary-button" onClick={() => setIsAddCommandFormOpen(true)}>
-                 <VscAdd className="button-icon" />
-                 Add Server
-               </button>
-             )}
-             {activeView === 'config' && (
-               <button className="primary-button" onClick={triggerConfigSave}>
-                 <VscSave className="button-icon" />
-                 Save Config
-               </button>
-             )}
+              <>
+                <div className="view-toggle" style={{ margin: 0 }}>
+                  <button
+                    className={`secondary-button${serverViewMode === 'card' ? ' active' : ''}`}
+                    onClick={() => setServerViewMode('card')}
+                    aria-label="Card View"
+                    title="Card View"
+                  >
+                    <VscLayout size={18} />
+                  </button>
+                  <button
+                    className={`secondary-button${serverViewMode === 'table' ? ' active' : ''}`}
+                    onClick={() => setServerViewMode('table')}
+                    aria-label="Table View"
+                    title="Table View"
+                  >
+                    <VscListFlat size={18} />
+                  </button>
+                </div>
+                <button className="primary-button" onClick={() => setIsAddCommandFormOpen(true)}>
+                  <VscAdd className="button-icon" />
+                  Add Server
+                </button>
+              </>
+            )}
+            {activeView === 'config' && (
+              <button className="primary-button" onClick={triggerConfigSave}>
+                <VscSave className="button-icon" />
+                Save Config
+              </button>
+            )}
           </div>
         </div>
 
@@ -618,169 +659,182 @@ function App() {
                 </div>
                 <div className="stat-item">
                   <h3>Running Servers</h3>
-                  {/* Use commandInfo length for running count for better accuracy */}
                   <div className="stat-value">
-                     {Object.values(commandInfo).filter(info => info.status.state === 'Running').length}
+                    {Object.values(commandInfo).filter(info => info.status.state === 'Running').length}
                   </div>
                 </div>
               </div>
-
               {/* Command list specific to Servers view */}
-              <div className="commands-list">
-                {commands.map((cmd: MCPCommand) => {
-                  const currentInfo = commandInfo[cmd.id];
-                  const status = currentInfo?.status ?? { state: 'Idle' };
-                  const hasError = status.state === 'Error' || (status.state === 'Finished' && !status.success);
-                  const isLocked = isActionLocked(status);
+              {serverViewMode === 'card' ? (
+                <div className="commands-list">
+                  {commands.map((cmd: MCPCommand) => {
+                    const currentInfo = commandInfo[cmd.id];
+                    const status = currentInfo?.status ?? { state: 'Idle' };
+                    const hasError = status.state === 'Error' || (status.state === 'Finished' && !status.success);
+                    const isLocked = isActionLocked(status);
 
-                  let buttonContent: React.ReactNode = null;
-                  let buttonAction = () => handleToggleCommand(cmd);
-                  let buttonClassName = "action-button";
-                  let isButtonDisabled = false;
-                  let showForceKillButton = false;
+                    let buttonContent: React.ReactNode = null;
+                    let buttonAction = () => handleToggleCommand(cmd);
+                    let buttonClassName = "action-button";
+                    let isButtonDisabled = false;
+                    let showForceKillButton = false;
 
-                  if (!currentInfo) {
-                      // Before first poll: Use cmd.isRunning as a basic hint
-                      if (cmd.isRunning) {
-                          buttonContent = <><VscDebugStop className="button-icon" /> Stop</>;
-                          buttonClassName += " stop";
-                      } else {
-                          buttonContent = <><VscDebugStart className="button-icon" /> Start</>;
-                          buttonClassName += " start";
-                      }
-                      // Button is enabled before first poll
-                  } else {
-                      // After first poll: Use detailed status
-                      switch (status.state) {
-                         case 'Idle':
-                         case 'Finished':
-                         case 'Error':
-                           buttonContent = <><VscDebugStart className="button-icon" /> Start</>;
-                           buttonClassName += " start";
-                           break;
-                         case 'Running':
-                           buttonContent = <><VscDebugStop className="button-icon" /> Stop</>;
-                           buttonClassName += " stop";
-                           break;
-                         case 'Starting':
-                           buttonContent = <>Starting...</>; 
-                           isButtonDisabled = true;
-                           break;
-                         case 'Stopping':
-                           buttonContent = <>Stopping...</>; 
-                           isButtonDisabled = true;
-                           showForceKillButton = true;
-                           break;
-                         case 'Killing':
-                           buttonContent = <>Killing...</>; 
-                           isButtonDisabled = true;
-                           break;
-                      }
-                  }
-                  
-                  return (
-                    <div key={cmd.id} className={`command-item ${hasError ? 'error-state' : ''} ${isLocked ? 'locked-state' : ''}`}>
-                       <div className="command-header">
-                         <div className="command-name">
-                           <span className={`status-indicator state-${status.state.toLowerCase()} ${hasError ? 'error' : ''}`} />
-                           {cmd.name}
-                         </div>
-                         <div className="menu-container">
-                           <button 
-                            className="menu-button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setOpenMenuId(openMenuId === cmd.id ? null : cmd.id);
-                            }}
-                            disabled={isLocked}
-                           >
-                             <div className="menu-dots">⋮</div>
-                           </button>
-                           {openMenuId === cmd.id && (
-                            <div className="dropdown-menu">
-                              <button onClick={() => {
-                                setEditingCommand(cmd);
-                                setIsAddCommandFormOpen(true);
-                                setOpenMenuId(null);
-                              }} disabled={isLocked}> <VscEdit/> Edit </button>
-                              <button onClick={() => handleRemoveCommand(cmd.id)} disabled={isLocked} className="delete"> <VscTrash/> Remove </button>
-                            </div>
-                           )}
-                         </div>
-                       </div>
-                       {status.state === 'Error' && (
-                           <div className="error-message command-error">Error: {status.message}</div>
-                       )}
-                       {status.state === 'Finished' && (
-                           <div className="info-row exit-code">
-                              <span className="info-label">Exit Code</span>
-                              <span className={`info-value ${status.success ? 'success' : 'error'}`}>{status.code ?? 'N/A'} ({status.success ? 'Success' : 'Failed'})</span>
+                    if (!currentInfo) {
+                        // Before first poll: Use cmd.isRunning as a basic hint
+                        if (cmd.isRunning) {
+                            buttonContent = <><VscDebugStop className="button-icon" /> Stop</>;
+                            buttonClassName += " stop";
+                        } else {
+                            buttonContent = <><VscDebugStart className="button-icon" /> Start</>;
+                            buttonClassName += " start";
+                        }
+                        // Button is enabled before first poll
+                    } else {
+                        // After first poll: Use detailed status
+                        switch (status.state) {
+                           case 'Idle':
+                           case 'Finished':
+                           case 'Error':
+                             buttonContent = <><VscDebugStart className="button-icon" /> Start</>;
+                             buttonClassName += " start";
+                             break;
+                           case 'Running':
+                             buttonContent = <><VscDebugStop className="button-icon" /> Stop</>;
+                             buttonClassName += " stop";
+                             break;
+                           case 'Starting':
+                             buttonContent = <>Starting...</>; 
+                             isButtonDisabled = true;
+                             break;
+                           case 'Stopping':
+                             buttonContent = <>Stopping...</>; 
+                             isButtonDisabled = true;
+                             showForceKillButton = true;
+                             break;
+                           case 'Killing':
+                             buttonContent = <>Killing...</>; 
+                             isButtonDisabled = true;
+                             break;
+                        }
+                    }
+                    
+                    return (
+                      <div key={cmd.id} className={`command-item ${hasError ? 'error-state' : ''} ${isLocked ? 'locked-state' : ''}`}>
+                         <div className="command-header">
+                           <div className="command-name">
+                             <span className={`status-indicator state-${status.state.toLowerCase()} ${hasError ? 'error' : ''}`} />
+                             {cmd.name}
                            </div>
-                       )}
-                       <div className="command-info">
-                         <div className="info-row">
-                            <span className="info-label">Command</span>
-                            <span className="info-value">{cmd.command} {cmd.args.join(' ')}</span>
-                          </div>
-                          {cmd.port && (
-                            <div className="info-row">
-                              <span className="info-label">Configured Port</span>
-                              <span className="info-value">{cmd.port}</span>
-                            </div>
-                          )}
-                          {currentInfo?.process_id && status.state === 'Running' && (
-                            <div className="info-row">
-                              <span className="info-label">Process ID</span>
-                              <span className="info-value">{currentInfo.process_id}</span>
-                            </div>
-                          )}
-                          {currentInfo?.port && status.state === 'Running' && (
-                            <div className="info-row">
-                              <span className="info-label">Active Port</span>
-                              <span className="info-value">{currentInfo.port}</span>
-                            </div>
-                          )}
-                          {Object.entries(cmd.env || {}).length > 0 && (
-                            <div className="info-row">
-                              <span className="info-label">Env</span>
-                              <span className="info-value">{Object.entries(cmd.env || {}).map(([k, v]) => `${k}=${v}`).join(', ')}</span>
-                            </div>
-                          )}
-                       </div>
-                       <div className="command-actions">
-                          {buttonContent && (
+                           <div className="menu-container">
                              <button 
-                               className={buttonClassName}
-                               onClick={buttonAction}
-                               disabled={isButtonDisabled}
+                              className="menu-button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setOpenMenuId(openMenuId === cmd.id ? null : cmd.id);
+                              }}
+                              disabled={isLocked}
                              >
-                               {buttonContent}
+                               <div className="menu-dots">⋮</div>
                              </button>
-                          )}
-                          {showForceKillButton && (
-                             <button 
-                                className="action-button stop force-kill"
-                                onClick={() => handleForceKill(cmd.id)}
-                                title="Force Kill Process"
+                             {openMenuId === cmd.id && (
+                              <div className="dropdown-menu">
+                                <button onClick={() => {
+                                  setEditingCommand(cmd);
+                                  setIsAddCommandFormOpen(true);
+                                  setOpenMenuId(null);
+                                }} disabled={isLocked}> <VscEdit/> Edit </button>
+                                <button onClick={() => handleRemoveCommand(cmd.id)} disabled={isLocked} className="delete"> <VscTrash/> Remove </button>
+                              </div>
+                             )}
+                           </div>
+                         </div>
+                         {status.state === 'Error' && (
+                             <div className="error-message command-error">Error: {status.message}</div>
+                         )}
+                         {status.state === 'Finished' && (
+                             <div className="info-row exit-code">
+                                <span className="info-label">Exit Code</span>
+                                <span className={`info-value ${status.success ? 'success' : 'error'}`}>{status.code ?? 'N/A'} ({status.success ? 'Success' : 'Failed'})</span>
+                             </div>
+                         )}
+                         <div className="command-info">
+                           <div className="info-row">
+                              <span className="info-label">Command</span>
+                              <span className="info-value">{cmd.command} {cmd.args.join(' ')}</span>
+                            </div>
+                            {cmd.port && (
+                              <div className="info-row">
+                                <span className="info-label">Configured Port</span>
+                                <span className="info-value">{cmd.port}</span>
+                              </div>
+                            )}
+                            {currentInfo?.process_id && status.state === 'Running' && (
+                              <div className="info-row">
+                                <span className="info-label">Process ID</span>
+                                <span className="info-value">{currentInfo.process_id}</span>
+                              </div>
+                            )}
+                            {currentInfo?.port && status.state === 'Running' && (
+                              <div className="info-row">
+                                <span className="info-label">Active Port</span>
+                                <span className="info-value">{currentInfo.port}</span>
+                              </div>
+                            )}
+                            {Object.entries(cmd.env || {}).length > 0 && (
+                              <div className="info-row">
+                                <span className="info-label">Env</span>
+                                <span className="info-value">{Object.entries(cmd.env || {}).map(([k, v]) => `${k}=${v}`).join(', ')}</span>
+                              </div>
+                            )}
+                         </div>
+                         <div className="command-actions">
+                            {buttonContent && (
+                               <button 
+                                 className={buttonClassName}
+                                 onClick={buttonAction}
+                                 disabled={isButtonDisabled}
+                               >
+                                 {buttonContent}
+                               </button>
+                            )}
+                            {showForceKillButton && (
+                               <button 
+                                  className="action-button stop force-kill"
+                                  onClick={() => handleForceKill(cmd.id)}
+                                  title="Force Kill Process"
+                                >
+                                   <VscStopCircle className="button-icon" /> 
+                                   Force Kill
+                                </button>
+                            )}
+                            {(status.state === 'Running' || status.state === 'Starting' || status.state === 'Stopping' || status.state === 'Killing') && ( 
+                              <button 
+                                className="action-button secondary"
+                                onClick={() => openTerminalTab(cmd.id)}
                               >
-                                 <VscStopCircle className="button-icon" /> 
-                                 Force Kill
+                                <VscTerminal className="button-icon" />
+                                Terminal
                               </button>
-                          )}
-                          {(status.state === 'Running' || status.state === 'Starting' || status.state === 'Stopping' || status.state === 'Killing') && ( 
-                            <button 
-                              className="action-button secondary"
-                              onClick={() => openTerminalTab(cmd.id)}
-                            >
-                              <VscTerminal className="button-icon" />
-                              Terminal
-                            </button>
-                          )}
+                            )}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <TableView
+                  commands={commands}
+                  commandInfo={commandInfo}
+                  onToggleCommand={handleToggleCommand}
+                  onEditCommand={(cmd) => { setEditingCommand(cmd); setIsAddCommandFormOpen(true); }}
+                  onRemoveCommand={handleRemoveCommand}
+                  onForceKill={handleForceKill}
+                  onOpenTerminal={openTerminalTab}
+                  openMenuId={openMenuId}
+                  setOpenMenuId={setOpenMenuId}
+                  isActionLocked={isActionLocked}
+                />
+              )}
             </>
           )}
 
@@ -795,6 +849,10 @@ function App() {
               onClose={() => setActiveView('servers')} // Config editor close goes back to servers
               onSave={handleSaveConfig}
             /> // Assuming ConfigEditor doesn't need header
+          )}
+
+          {activeView === 'discover' && (
+            <DiscoverServers onAddServer={handleAddCommand} />
           )}
         </div> 
       </main>
